@@ -1,4 +1,4 @@
-# isomorphic-lib-template Changelog
+# @digitalcredentials/credential-status-manager-db Changelog
 
 ## 1.0.0 - TBD
 

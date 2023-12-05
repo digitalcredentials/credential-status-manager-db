@@ -1,6 +1,6 @@
 {
-  "name": "@digitalcredentials/isomorphic-lib-template",
-  "description": "A Typescript/Javascript isomorphic library template, for use in the browser, Node.js, and React Native.",
+  "name": "@digitalcredentials/credential-status-manager-db",
+  "description": "A Typescript library for managing the status of Verifiable Credentials in a Database using Status List 2021.",
   "version": "0.0.1",
   "scripts": {
     "build": "npm run clear && tsc -d && tsc -p tsconfig.esm.json",
@@ -71,8 +71,21 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/digitalcredentials/isomorphic-lib-template"
+    "url": "https://github.com/digitalcredentials/credential-status-manager-db"
   },
-  "homepage": "https://github.com/digitalcredentials/isomorphic-lib-template",
-  "bugs": "https://github.com/digitalcredentials/isomorphic-lib-template/issues"
+  "homepage": "https://github.com/digitalcredentials/credential-status-manager-db",
+  "bugs": "https://github.com/digitalcredentials/credential-status-manager-db/issues",
+  "dependencies": {
+    "@digitalbazaar/vc-status-list-context": "^3.0.1",
+    "@digitalcredentials/bnid": "^2.1.2",
+    "@digitalcredentials/did-method-key": "^2.0.3",
+    "@digitalcredentials/ed25519-signature-2020": "^3.0.2",
+    "@digitalcredentials/ed25519-verification-key-2020": "^4.0.0",
+    "@digitalcredentials/security-document-loader": "^3.1.0",
+    "@digitalcredentials/vc-data-model": "^1.1.1",
+    "@digitalcredentials/vc-status-list": "^7.1.0",
+    "@digitalcredentials/x25519-key-agreement-key-2020": "^3.0.0",
+    "@interop/did-web-resolver": "^3.0.1",
+    "mongodb": "^6.3.0"
+  }
 }
