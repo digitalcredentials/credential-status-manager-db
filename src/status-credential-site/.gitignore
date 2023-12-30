@@ -1,0 +1,7 @@
+# Compiled resources
+dist/
+node_modules/
+
+# Library snapshot
+package-lock.json
+yarn.lock

@@ -251,7 +251,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     return record as T | null;
   }
 
-  // Retrieve single database record by field
+  // retrieves single database record by field
   async getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string): Promise<T | null> {
     const database = await this.connectDatabase();
     const table = database.collection(tableName);
@@ -261,7 +261,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     return record as T | null;
   }
 
-  // Retrieve multiple database records by field
+  // retrieves multiple database records by field
   async getRecordsByField<T>(tableName: string, fieldKey: string, fieldValue: string): Promise<T[]> {
     const database = await this.connectDatabase();
     const table = database.collection(tableName);
