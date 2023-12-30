@@ -1,0 +1,28 @@
+{
+  "name": "status-credential-site",
+  "version": "1.0.0",
+  "description": "Site for hosting status credential",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "start": "node dist/index.js",
+    "dev": "nodemon dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@digitalcredentials/vc-data-model": "^1.1.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "http-status-codes": "^2.3.0",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.6",
+    "nodemon": "^3.0.2",
+    "typescript": "^5.3.3"
+  }
+}
