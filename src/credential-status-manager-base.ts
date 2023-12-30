@@ -20,12 +20,6 @@ const CREDENTIAL_STATUS_LIST_SIZE = 100000;
 // Credential status type
 const CREDENTIAL_STATUS_TYPE = 'StatusList2021Entry';
 
-// Name of credential status branch
-export const CREDENTIAL_STATUS_REPO_BRANCH_NAME = 'main';
-
-// Credential status resource names
-export const CREDENTIAL_STATUS_CONFIG_FILE = 'config.json';
-
 // Credential status manager database service
 export enum CredentialStatusManagerService {
   MongoDb = 'mongodb'
@@ -103,10 +97,12 @@ export interface BaseCredentialStatusManagerOptions {
   configTableName: string;
   eventTableName: string;
   credentialEventTableName: string;
-  username: string;
-  password: string;
-  host: string;
-  port: string;
+  databaseName: string;
+  databaseUrl?: string;
+  databaseUsername: string;
+  databasePassword: string;
+  databaseHost?: string;
+  databasePort?: string;
   didMethod: DidMethod;
   didSeed: string;
   didWebUrl?: string;
@@ -120,10 +116,9 @@ export const BASE_MANAGER_REQUIRED_OPTIONS: Array<keyof BaseCredentialStatusMana
   'configTableName',
   'eventTableName',
   'credentialEventTableName',
-  'username',
-  'password',
-  'host',
-  'port',
+  'databaseName',
+  'databaseUsername',
+  'databasePassword',
   'didMethod',
   'didSeed'
 ];
@@ -134,13 +129,15 @@ export abstract class BaseCredentialStatusManager {
   protected readonly configTableName: string;
   protected readonly eventTableName: string;
   protected readonly credentialEventTableName: string;
-  protected readonly username: string;
-  protected readonly password: string;
-  protected readonly host: string;
-  protected readonly port: string;
+  protected readonly databaseName: string;
+  protected readonly databaseUrl?: string;
+  protected databaseUsername: string;
+  protected databasePassword: string;
+  protected readonly databaseHost?: string;
+  protected readonly databasePort?: string;
   protected readonly didMethod: DidMethod;
   protected readonly didSeed: string;
-  protected readonly didWebUrl: string;
+  protected readonly didWebUrl?: string;
   protected readonly signUserCredential: boolean;
   protected readonly signStatusCredential: boolean;
 
@@ -150,10 +147,12 @@ export abstract class BaseCredentialStatusManager {
       configTableName,
       eventTableName,
       credentialEventTableName,
-      username,
-      password,
-      host,
-      port,
+      databaseName,
+      databaseUrl,
+      databaseUsername,
+      databasePassword,
+      databaseHost,
+      databasePort,
       didMethod,
       didSeed,
       didWebUrl,
@@ -164,15 +163,32 @@ export abstract class BaseCredentialStatusManager {
     this.configTableName = configTableName;
     this.eventTableName = eventTableName;
     this.credentialEventTableName = credentialEventTableName;
-    this.username = username;
-    this.password = password;
-    this.host = host;
-    this.port = port;
+    this.databaseName = databaseName;
+    this.databaseUrl = databaseUrl;
+    this.databaseUsername = databaseUsername;
+    this.databasePassword = databasePassword;
+    this.databaseHost = databaseHost;
+    this.databasePort = databasePort;
     this.didMethod = didMethod;
     this.didSeed = didSeed;
-    this.didWebUrl = didWebUrl ?? '';
+    this.didWebUrl = didWebUrl;
     this.signUserCredential = signUserCredential ?? false;
     this.signStatusCredential = signStatusCredential ?? false;
+  }
+
+  // retrieves database name
+  getDatabaseName(): string {
+    return this.databaseName;
+  }
+
+  // retrieves database table names
+  getDatabaseTableNames(): string[] {
+    return [
+      this.statusCredentialTableName,
+      this.configTableName,
+      this.eventTableName,
+      this.credentialEventTableName
+    ];
   }
 
   // generates new status credential ID
@@ -272,8 +288,8 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // allocates status for credential in race-prone manner
-  async allocateStatus(credential: VerifiableCredential): Promise<VerifiableCredential> {
-    return this.executeAsTransaction(async () => {
+  async allocateStatus(credential: VerifiableCredential): Promise<VerifiableCredential | void> {
+    return this.executeAsTransaction(async (options?: any) => {
       // report error for compact JWT credentials
       if (typeof credential === 'string') {
         throw new BadRequestError({
@@ -330,7 +346,7 @@ export abstract class BaseCredentialStatusManager {
         await this.createStatusCredential({
           id: latestStatusCredentialId,
           credential: statusCredential
-        });
+        }, options);
       }
 
       // sign credential if necessary
@@ -365,17 +381,17 @@ export abstract class BaseCredentialStatusManager {
         statusCredentialId,
         credentialStatusIndex: parseInt(statusListIndex)
       };
-      await this.createEvent(event);
+      await this.createEvent(event, options);
       await this.createCredentialEvent({
         credentialId: credential.id as string,
         eventId
-      });
+      }, options);
 
       // persist updates to config data
       await this.updateConfig({
         latestStatusCredentialId,
         ...embedCredentialStatusResultRest
-      });
+      }, options);
 
       return credentialWithStatus;
     });
@@ -385,8 +401,8 @@ export abstract class BaseCredentialStatusManager {
   async updateStatus({
     credentialId,
     credentialStatus
-  }: UpdateStatusOptions): Promise<VerifiableCredential> {
-    return this.executeAsTransaction(async () => {
+  }: UpdateStatusOptions): Promise<VerifiableCredential | void> {
+    return this.executeAsTransaction(async (options?: any) => {
       // retrieve latest relevant event for credential with given ID
       const oldEvent = await this.getLatestEventForCredential(credentialId);
 
@@ -446,7 +462,7 @@ export abstract class BaseCredentialStatusManager {
           throw new BadRequestError({
             message:
               '"credentialStatus" must be one of the following values: ' +
-              `${Object.values(CredentialState).join(', ')}.`
+              `${Object.values(CredentialState).map(s => `"${s}"`).join(', ')}.`
           });
       }
       const statusCredentialUrlBase = this.getStatusCredentialUrlBase();
@@ -471,7 +487,7 @@ export abstract class BaseCredentialStatusManager {
       await this.updateStatusCredential({
         id: statusCredentialId,
         credential: statusCredential
-      });
+      }, options);
 
       // create new event
       const eventId = uuid();
@@ -486,11 +502,11 @@ export abstract class BaseCredentialStatusManager {
         statusCredentialId,
         credentialStatusIndex
       };
-      await this.createEvent(newEvent);
+      await this.createEvent(newEvent, options);
       await this.updateCredentialEvent({
         credentialId,
         eventId
-      });
+      }, options);
 
       return statusCredential;
     });
@@ -517,17 +533,36 @@ export abstract class BaseCredentialStatusManager {
   // deploys website to host credential status management resources
   async deployCredentialStatusWebsite(): Promise<void> {};
 
-  // checks if caller has authority to update status based on status repo access token
-  abstract hasStatusAuthority(repoAccessToken: string, metaRepoAccessToken?: string): Promise<boolean>;
+  // checks if caller has authority to manage status based on authorization credentials
+  abstract hasAuthority(databaseUsername: string, databasePassword: string): Promise<boolean>;
 
-  // checks if status repos exist
-  abstract statusReposExist(): Promise<boolean>;
+  // checks if database exists
+  abstract databaseExists(): Promise<boolean>;
 
-  // checks if status repos are empty
-  abstract statusReposEmpty(): Promise<boolean>;
+  // checks if database table exists
+  abstract databaseTableExists(tableName: string): Promise<boolean>;
 
-  // checks if status repos are properly configured
-  async statusReposProperlyConfigured(): Promise<boolean> {
+  // checks if database tables exist
+  async databaseTablesExist(): Promise<boolean> {
+    const databaseTableNames = this.getDatabaseTableNames();
+    return databaseTableNames.every(async (tableName) => {
+      return this.databaseTableExists(tableName);
+    });
+  }
+
+  // checks if database table is empty
+  abstract databaseTableEmpty(tableName: string): Promise<boolean>;
+
+  // checks if database tables are empty
+  async databaseTablesEmpty(): Promise<boolean> {
+    const databaseTableNames = this.getDatabaseTableNames();
+    return databaseTableNames.every(async (tableName) => {
+      return this.databaseTableEmpty(tableName);
+    });
+  }
+
+  // checks if database tables are properly configured
+  async databaseTablesProperlyConfigured(): Promise<boolean> {
     try {
       // retrieve config data
       const configId = await this.getConfigId();
@@ -590,54 +625,54 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // executes function as transaction
-  abstract executeAsTransaction<T>(func: <T>() => Promise<T>): Promise<T>;
+  abstract executeAsTransaction<T>(func: <T>(options?: any) => Promise<T | void>): Promise<T | void>;
 
   // creates single database record
-  abstract createRecord<T>(databaseTableName: string, record: T): Promise<void>;
+  abstract createRecord<T>(tableName: string, record: T, options?: any): Promise<void>;
 
   // creates status credential
-  async createStatusCredential(statusCredential: StatusCredentialRecord): Promise<void> {
-    return this.createRecord(this.statusCredentialTableName, statusCredential);
+  async createStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: any): Promise<void> {
+    return this.createRecord(this.statusCredentialTableName, statusCredentialRecord, options);
   }
 
   // creates config
-  async createConfig(config: Config): Promise<void> {
-    return this.createRecord(this.configTableName, config);
+  async createConfig(config: Config, options?: any): Promise<void> {
+    return this.createRecord(this.configTableName, config, options);
   }
 
   // creates event
-  async createEvent(event: Event): Promise<void> {
-    return this.createRecord(this.eventTableName, event);
+  async createEvent(event: Event, options?: any): Promise<void> {
+    return this.createRecord(this.eventTableName, event, options);
   }
 
   // creates credential event
-  async createCredentialEvent(credentialEvent: CredentialEvent): Promise<void> {
-    return this.createRecord(this.credentialEventTableName, credentialEvent);
+  async createCredentialEvent(credentialEvent: CredentialEvent, options?: any): Promise<void> {
+    return this.createRecord(this.credentialEventTableName, credentialEvent, options);
   }
 
   // updates single database record
-  abstract updateRecord<T>(databaseTableName: string, recordId: string, record: T): Promise<void>;
+  abstract updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: any): Promise<void>;
 
   // updates status credential
-  async updateStatusCredential(statusCredential: StatusCredentialRecord): Promise<void> {
-    const { id } = statusCredential;
-    return this.updateRecord(this.credentialEventTableName, id, statusCredential);
+  async updateStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: any): Promise<void> {
+    const { id } = statusCredentialRecord;
+    return this.updateRecord(this.statusCredentialTableName, 'id', id, statusCredentialRecord, options);
   }
 
   // updates config
-  async updateConfig(config: Config): Promise<void> {
+  async updateConfig(config: Config, options?: any): Promise<void> {
     const { id } = config;
-    return this.updateRecord(this.configTableName, id, config);
+    return this.updateRecord(this.configTableName, 'id', id, config, options);
   }
 
   // updates credential event
-  async updateCredentialEvent(credentialEvent: CredentialEvent): Promise<void> {
+  async updateCredentialEvent(credentialEvent: CredentialEvent, options?: any): Promise<void> {
     const { credentialId } = credentialEvent;
-    return this.updateRecord(this.credentialEventTableName, credentialId, credentialEvent);
+    return this.updateRecord(this.credentialEventTableName, 'credentialId', credentialId, credentialEvent, options);
   }
 
   // retrieves any database record
-  abstract getAnyRecord<T>(databaseTableName: string): Promise<T | undefined>;
+  abstract getAnyRecord<T>(tableName: string): Promise<T | null>;
 
   // retrieves config ID
   async getConfigId(): Promise<string> {
@@ -651,14 +686,14 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves single database record by field
-  abstract getRecordByField<T>(databaseTableName: string, fieldKey: string, fieldValue: string): Promise<T | undefined>;
+  abstract getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string): Promise<T | null>;
 
   // retrieves multiple database records by field
-  abstract getRecordsByField<T>(databaseTableName: string, fieldKey: string, fieldValue: string): Promise<T[]>;
+  abstract getRecordsByField<T>(tableName: string, fieldKey: string, fieldValue: string): Promise<T[]>;
 
   // retrieves single database record by id
-  async getRecordById<T>(databaseTableName: string, id: string): Promise<T | undefined> {
-    return this.getRecordByField(databaseTableName, 'id', id);
+  async getRecordById<T>(tableName: string, id: string): Promise<T | null> {
+    return this.getRecordByField(tableName, 'id', id);
   }
 
   // retrieves status credential record by ID
@@ -691,7 +726,7 @@ export abstract class BaseCredentialStatusManager {
 
   // retrieves latest event featuring credential with given ID
   async getLatestEventForCredential(credentialId: string): Promise<Event> {
-    const credentialEventRecord = await this.getRecordById<CredentialEvent>(this.credentialEventTableName, credentialId);
+    const credentialEventRecord = await this.getRecordByField<CredentialEvent>(this.credentialEventTableName, 'credentialId', credentialId);
     if (!credentialEventRecord) {
       throw new NotFoundError({
         message: `Unable to find event for credential with ID "${credentialId}".`
@@ -708,16 +743,16 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves all records in table
-  abstract getAllRecordsInTable<T>(databaseTableName: string): Promise<T[]>;
+  abstract getAllRecords<T>(tableName: string): Promise<T[]>;
 
   // retrieves all status credential records
   async getAllStatusCredentialRecords(): Promise<StatusCredentialRecord[]> {
-    return this.getAllRecordsInTable(this.statusCredentialTableName);
+    return this.getAllRecords(this.statusCredentialTableName);
   }
 
   // retrieves all credential event records
   async getAllCredentialEventRecords(): Promise<Event[]> {
-    return this.getAllRecordsInTable(this.credentialEventTableName);
+    return this.getAllRecords(this.credentialEventTableName);
   }
 
   // retrieves all credential IDs

@@ -1,4 +1,4 @@
 /*!
  * Copyright (c) 2023 Digital Credentials Consortium. All rights reserved.
  */
-export { Example } from './Example'
+export { createStatusManager } from './credential-status-manager-index.js';
