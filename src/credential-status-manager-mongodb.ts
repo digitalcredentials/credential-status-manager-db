@@ -1,85 +1,36 @@
 import dns from 'dns';
-import { Db, Document, MongoClient } from 'mongodb';
 import {
-  BASE_MANAGER_REQUIRED_OPTIONS,
+  ClientSession,
+  Db,
+  Document,
+  MongoClient,
+  ReadConcernLevel,
+  ReadPreference,
+  TransactionOptions
+} from 'mongodb';
+import {
   BaseCredentialStatusManager,
-  BaseCredentialStatusManagerOptions
+  BaseCredentialStatusManagerOptions,
+  DatabaseService
 } from './credential-status-manager-base.js';
-import { BadRequestError } from './errors.js';
-import { DidMethod } from './helpers.js';
+
+// Type definition for database connection
+interface MongoDbConnection {
+  client: MongoClient;
+  database: Db;
+}
+
+// Type definition for database connection
+interface MongoDbTransactionOptions {
+  client: MongoClient;
+  session: ClientSession;
+}
 
 // Implementation of BaseCredentialStatusManager for MongoDB
 export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager {
-  private client!: MongoClient;
-
   constructor(options: BaseCredentialStatusManagerOptions) {
-    const {
-      statusCredentialTableName,
-      configTableName,
-      eventTableName,
-      credentialEventTableName,
-      databaseName,
-      databaseUrl,
-      databaseUsername,
-      databasePassword,
-      databaseHost,
-      databasePort,
-      didMethod,
-      didSeed,
-      didWebUrl,
-      signUserCredential=false,
-      signStatusCredential=false
-    } = options;
-    super({
-      statusCredentialTableName,
-      configTableName,
-      eventTableName,
-      credentialEventTableName,
-      databaseName,
-      databaseUrl,
-      databaseUsername,
-      databasePassword,
-      databaseHost,
-      databasePort,
-      didMethod,
-      didSeed,
-      didWebUrl,
-      signUserCredential,
-      signStatusCredential
-    });
-    this.ensureProperConfiguration(options);
-  }
-
-  // ensures proper configuration of MongoDB status manager
-  ensureProperConfiguration(options: BaseCredentialStatusManagerOptions): void {
-    const missingOptions = [] as
-      Array<keyof BaseCredentialStatusManagerOptions>;
-
-    const isProperlyConfigured = BASE_MANAGER_REQUIRED_OPTIONS.every(
-      (option: keyof BaseCredentialStatusManagerOptions) => {
-        if (!options[option]) {
-          missingOptions.push(option as any);
-        }
-        return !!options[option];
-      }
-    );
-
-    if (!isProperlyConfigured) {
-      throw new BadRequestError({
-        message:
-          'You have neglected to set the following required options for the ' +
-          'MongoDB credential status manager: ' +
-          `${missingOptions.map(o => `"${o}"`).join(', ')}.`
-      });
-    }
-
-    if (this.didMethod === DidMethod.Web && !this.didWebUrl) {
-      throw new BadRequestError({
-        message:
-          'The value of "didWebUrl" must be provided ' +
-          'when using "didMethod" of type "web".'
-      });
-    }
+    super(options);
+    this.databaseService = DatabaseService.MongoDB;
   }
 
   // retrieves database URL
@@ -87,7 +38,6 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     if (this.databaseUrl) {
       return this.databaseUrl;
     }
-
     return new Promise((resolve, reject) => {
       dns.resolveSrv(`_mongodb._tcp.${this.databaseHost}`, (error, records) => {
         if (error) {
@@ -111,173 +61,247 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     });
   }
 
-  // resets database client
-  // This function is necessary for cases in which components
-  // of the database URL are liable to change regularly
-  async resetDatabaseClient() {
+  // retrieve database client
+  async getDatabaseClient() {
     // get database URL
     const databaseUrl = await this.getDatabaseUrl();
-
-    // configure MongoDB client
-    this.client = new MongoClient(databaseUrl);
+    // create fresh MongoDB client
+    const client = new MongoClient(databaseUrl);
+    return client;
   }
 
   // connects to database
-  async connectDatabase(): Promise<Db> {
-    await this.resetDatabaseClient();
-    await this.client.connect();
-    return this.client.db(this.databaseName);
+  async connectDatabase(client?: MongoClient): Promise<MongoDbConnection> {
+    if (client) {
+      await client.connect();
+      const database = client.db(this.databaseName);
+      return { client, database };
+    }
+    const newClient = await this.getDatabaseClient();
+    await newClient.connect();
+    const database = newClient.db(this.databaseName);
+    return { client: newClient, database };
   }
 
   // disconnects from database
-  async disconnectDatabase(): Promise<void> {
-    await this.client.close();
-  }
-
-  // checks if caller has authority to manage status based on authorization credentials
-  async hasAuthority(databaseUsername: string, databasePassword: string): Promise<boolean> {
-    this.databaseUsername = databaseUsername;
-    this.databasePassword = databasePassword;
-    await this.resetDatabaseClient();
-    let hasAccess;
-    try {
-      await this.connectDatabase();
-      hasAccess = true;
-    } catch (error) {
-      hasAccess = false;
-    } finally {
-      await this.disconnectDatabase();
+  async disconnectDatabase(client?: MongoClient): Promise<void> {
+    if (client) {
+      client.close();
     }
-    return hasAccess;
-  }
-
-  // checks if database exists
-  async databaseExists(): Promise<boolean> {
-    let exists;
-    try {
-      const database = await this.connectDatabase();
-      const databaseList = await database.admin().listDatabases();
-      exists = databaseList.databases.some(db => db.name === this.databaseName);
-    } catch (error) {
-      exists = false;
-    } finally {
-      await this.disconnectDatabase();
-    }
-    return exists;
-  }
-
-  // checks if database table exists
-  async databaseTableExists(tableName: string): Promise<boolean> {
-    let exists;
-    try {
-      const database = await this.connectDatabase();
-      const tableListFiltered = await database.listCollections({ name: tableName }).toArray();
-      exists = tableListFiltered.length !== 0;
-    } catch (error) {
-      exists = false;
-    } finally {
-      await this.disconnectDatabase();
-    }
-    return exists;
-  }
-
-  // checks if database table is empty
-  async databaseTableEmpty(tableName: string): Promise<boolean> {
-    let empty;
-    try {
-      const database = await this.connectDatabase();
-      const table = database.collection(tableName);
-      const recordCount = await table.countDocuments();
-      empty = recordCount === 0;
-    } catch (error) {
-      empty = true;
-    } finally {
-      await this.disconnectDatabase();
-    }
-    return empty;
   }
 
   // executes function as transaction
-  async executeAsTransaction<T>(func: <T>(options?: any) => Promise<T>): Promise<T> {
-    await this.resetDatabaseClient();
-    const session = this.client.startSession();
-    return new Promise(async (resolve, reject) => {
-      try {
-        await session.withTransaction(async () => {
-          try {
-            const res = await func({
-              client: this.client,
-              session
-            }) as T;
-            resolve(res);
-          } catch (error) {
-            reject(error);
-          } finally {
-            await this.disconnectDatabase();
-          }
-        });
-      } catch (error) {
-        reject(error);
-      } finally {
-        await session.endSession();
+  async executeTransaction(func: (options?: MongoDbTransactionOptions) => Promise<any>): Promise<any> {
+    const { client } = await this.connectDatabase();
+    const session = client.startSession();
+    const transactionOptions: TransactionOptions = {
+      readPreference: ReadPreference.primary,
+      readConcern: { level: ReadConcernLevel.majority },
+      writeConcern: { w: 'majority' },
+      maxTimeMS: 30000
+    };
+    try {
+      const result = await session.withTransaction(async () => {
+        const result = await func({ client, session });
+        return result;
+      }, transactionOptions);
+      return result;
+    } finally {
+      await session.endSession();
+      await this.disconnectDatabase(client);
+    }
+  }
+
+  // checks if caller has authority to manage status based on authorization credentials
+  async hasAuthority(databaseUsername: string, databasePassword: string, options?: MongoDbTransactionOptions): Promise<boolean> {
+    const { client: clientCandidate, session } = options ?? {};
+    this.databaseUsername = databaseUsername;
+    this.databasePassword = databasePassword;
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      await database.command({ ping: 1 });
+      return true;
+    } catch (error) {
+      return false;
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
       }
-    });
+    }
+  }
+
+  // creates database
+  // (databases are implicitly created in MongoDB)
+  async createDatabase(options?: MongoDbTransactionOptions): Promise<void> {}
+
+  // creates database table
+  // (database tables are implicitly created in MongoDB)
+  async createDatabaseTable(tableName: string, options?: MongoDbTransactionOptions): Promise<void> {}
+
+  // checks if database exists
+  async databaseExists(options?: MongoDbTransactionOptions): Promise<boolean> {
+    const { client: clientCandidate, session } = options ?? {};
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(this.configTableName);
+      const record = await table.findOne({}, { session });
+      return !!record;
+    } catch (error: any) {
+      if (error.codeName === 'NamespaceNotFound') {
+        return false;
+      }
+      throw error;
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
+  }
+
+  // checks if database table exists
+  async databaseTableExists(tableName: string, options?: MongoDbTransactionOptions): Promise<boolean> {
+    const { client: clientCandidate, session } = options ?? {};
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const record = await table.findOne({}, { session });
+      return !!record;
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
+  }
+
+  // checks if database table is empty
+  async databaseTableEmpty(tableName: string, options?: MongoDbTransactionOptions): Promise<boolean> {
+    const { client: clientCandidate, session } = options ?? {};
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const query = {};
+      const recordCount = await table.countDocuments(query, { session });
+      return recordCount === 0;
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
   }
 
   // creates single database record
-  async createRecord<T>(tableName: string, record: T, options?: any): Promise<void> {
-    const { session } = options;
-    const database = await this.connectDatabase();
-    const table = database.collection(tableName);
-    await table.insertOne(record as Document, { session });
-    await this.disconnectDatabase();
+  async createRecord<T>(tableName: string, record: T, options?: MongoDbTransactionOptions): Promise<void> {
+    const { client: clientCandidate, session } = options ?? {};
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      await table.insertOne(record as Document, { session });
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
   }
 
   // updates single database record
-  async updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: any): Promise<void> {
-    const { session } = options;
-    const database = await this.connectDatabase();
-    const table = database.collection(tableName);
-    await table.findOneAndReplace({ [recordIdKey]: recordIdValue }, record as Document, { session });
-    await this.disconnectDatabase();
+  async updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: MongoDbTransactionOptions): Promise<void> {
+    const { client: clientCandidate, session } = options ?? {};
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const query = { [recordIdKey]: recordIdValue };
+      await table.findOneAndReplace(query, record as Document, { session });
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
   }
 
   // retrieves any database record
-  async getAnyRecord<T>(tableName: string): Promise<T | null> {
-    const database = await this.connectDatabase();
-    const table = database.collection(tableName);
-    const record = await table.findOne();
-    await this.disconnectDatabase();
+  async getAnyRecord<T>(tableName: string, options?: MongoDbTransactionOptions): Promise<T | null> {
+    const { client: clientCandidate, session } = options ?? {};
+    let record;
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const query = {};
+      record = await table.findOne(query, { session });
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
     return record as T | null;
   }
 
   // retrieves single database record by field
-  async getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string): Promise<T | null> {
-    const database = await this.connectDatabase();
-    const table = database.collection(tableName);
-    const query = { [fieldKey]: fieldValue };
-    const record = await table.findOne(query);
-    await this.disconnectDatabase();
+  async getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: MongoDbTransactionOptions): Promise<T | null> {
+    const { client: clientCandidate, session } = options ?? {};
+    let record;
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const query = { [fieldKey]: fieldValue };
+      record = await table.findOne(query, { session });
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
     return record as T | null;
   }
 
-  // retrieves multiple database records by field
-  async getRecordsByField<T>(tableName: string, fieldKey: string, fieldValue: string): Promise<T[]> {
-    const database = await this.connectDatabase();
-    const table = database.collection(tableName);
-    const query = { [fieldKey]: fieldValue };
-    const recordsRaw = table.find(query);
-    const records = await recordsRaw.toArray();
-    await this.disconnectDatabase();
-    return records as T[];
-  }
-
   // retrieves all records in table
-  async getAllRecords<T>(tableName: string): Promise<T[]> {
-    const database = await this.connectDatabase();
-    const table = database.collection(tableName);
-    const records = await table.find().toArray();
-    await this.disconnectDatabase();
+  async getAllRecords<T>(tableName: string, options?: MongoDbTransactionOptions): Promise<T[]> {
+    const { client: clientCandidate, session } = options ?? {};
+    let records = [];
+    let client;
+    try {
+      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const query = {};
+      records = await table.find(query, { session }).toArray();
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
     return records as T[];
   }
 }
