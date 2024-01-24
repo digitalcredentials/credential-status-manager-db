@@ -1,15 +1,12 @@
 import { BaseCredentialStatusManager } from './credential-status-manager-base.js';
 
 interface BaseErrorOptions {
-  statusManager?: BaseCredentialStatusManager;
   message: string;
 }
 
 interface ChildErrorOptions {
-  statusManager?: BaseCredentialStatusManager;
   message?: string;
   defaultMessage: string;
-  label: string;
 }
 
 interface CustomErrorOptions {
@@ -18,67 +15,68 @@ interface CustomErrorOptions {
 }
 
 class BaseError extends Error {
-  public statusManager: BaseCredentialStatusManager | undefined;
   public message: string;
 
   constructor(options: BaseErrorOptions) {
-    const { statusManager, message } = options;
+    const { message } = options;
     super(message);
-    this.statusManager = statusManager;
     this.message = message;
   }
 }
 
 class ChildError extends BaseError {
   constructor(options: ChildErrorOptions) {
-    const { statusManager, defaultMessage, label } = options;
-    const message = `[${label}] ${options?.message ?? defaultMessage}`;
-    super({ statusManager, message });
+    const { defaultMessage } = options;
+    const message = `${options?.message ?? defaultMessage}`;
+    super({ message });
   }
 }
 
 export class BadRequestError extends ChildError {
   constructor(options?: CustomErrorOptions) {
-    const { statusManager, message } = options ?? {};
+    const { message } = options ?? {};
     const defaultMessage = 'That is an invalid request.';
-    const label = 'BadRequestError';
-    super({ statusManager, message, defaultMessage, label });
+    super({ message, defaultMessage });
   }
 }
 
 export class NotFoundError extends ChildError {
   constructor(options?: CustomErrorOptions) {
-    const { statusManager, message } = options ?? {};
+    const { message } = options ?? {};
     const defaultMessage = 'Resource not found.';
-    const label = 'NotFoundError';
-    super({ statusManager, message, defaultMessage, label });
+    super({ message, defaultMessage });
+  }
+}
+
+export class InternalServerError extends ChildError {
+  constructor(options?: CustomErrorOptions) {
+    const { message } = options ?? {};
+    const defaultMessage = 'The service encountered an internal error while processing your request.';
+    super({ message, defaultMessage });
   }
 }
 
 export class InvalidStateError extends ChildError {
   constructor(options?: CustomErrorOptions) {
-    const { statusManager, message } = options ?? {};
+    const { message } = options ?? {};
     const defaultMessage = 'The internal data has reached an invalid state.';
-    const label = 'InvalidStateError';
-    super({ statusManager, message, defaultMessage, label });
+    super({ message, defaultMessage });
   }
 }
 
 export class InvalidDidSeedError extends ChildError {
   constructor(options?: CustomErrorOptions) {
-    const { statusManager, message } = options ?? {};
+    const { message } = options ?? {};
     const defaultMessage = '"didSeed" must be a multibase-encoded value with at least 32 bytes.';
-    const label = 'InvalidDidSeedError';
-    super({ statusManager, message, defaultMessage, label });
+    super({ message, defaultMessage });
   }
 }
 
 export class InvalidCredentialsError extends ChildError {
   constructor(options?: CustomErrorOptions) {
-    const { statusManager, message } = options ?? {};
+    const { message } = options ?? {};
     const defaultMessage = 'The username/password combination you are using to access the database is invalid.';
-    const label = 'InvalidCredentialsError';
-    super({ statusManager, message, defaultMessage, label });
+    super({ message, defaultMessage });
   }
 }
 
@@ -87,8 +85,7 @@ export class MissingDatabaseError extends ChildError {
     const { statusManager, message } = options ?? {};
     const databaseName = statusManager?.getDatabaseName();
     const defaultMessage = `The database named "${databaseName}" must be manually created in advance.`;
-    const label = 'MissingDatabaseError';
-    super({ statusManager, message, defaultMessage, label });
+    super({ message, defaultMessage });
   }
 }
 
@@ -105,7 +102,6 @@ export class MissingDatabaseTableError extends ChildError {
       ' However, the following tables have not yet been created: ' +
       `${missingTables?.map(t => `"${t}"`).join(', ')}.` :
       '';
-    const label = 'MissingDatabaseTableError';
-    super({ statusManager, message, defaultMessage, label });
+    super({ message, defaultMessage });
   }
 }
