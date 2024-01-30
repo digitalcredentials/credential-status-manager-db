@@ -5,7 +5,7 @@ import { CONTEXT_URL_V1 } from '@digitalbazaar/vc-status-list-context';
 import { VerifiableCredential } from '@digitalcredentials/vc-data-model';
 import { createCredential, createList, decodeList } from '@digitalcredentials/vc-status-list';
 import { v4 as uuid } from 'uuid';
-import { BadRequestError, InternalServerError, NotFoundError } from './errors.js';
+import { BadRequestError, ChildError, InternalServerError, NotFoundError } from './errors.js';
 import {
   DidMethod,
   deriveStatusCredentialId,
@@ -13,8 +13,6 @@ import {
   getSigningMaterial,
   signCredential
 } from './helpers.js';
-import { AwsRegion, AwsStatusCredentialSiteDeployer } from './status-credential-site-deployer-aws.js';
-import { BaseStatusCredentialSiteDeployer, BaseStatusCredentialSiteDeployerOptions } from './status-credential-site-deployer-base.js';
 
 // Number of credentials tracked in a list
 const CREDENTIAL_STATUS_LIST_SIZE = 100000;
@@ -26,15 +24,6 @@ const CREDENTIAL_STATUS_TYPE = 'StatusList2021Entry';
 export enum DatabaseService {
   MongoDB = 'mongodb'
   // MySQL = 'mysql' // TODO - implement this
-}
-
-// Site hosting service
-export enum SiteService {
-  AWS = 'aws'
-  // DigitalOcean = 'digitalocean', // TODO - implement this
-  // Heroku = 'heroku', // TODO - implement this
-  // Netlify = 'netlify', // TODO - implement this
-  // Vercel = 'vercel' // TODO - implement this
 }
 
 // States of credential resulting from caller actions and tracked in the event log
@@ -105,7 +94,7 @@ interface UpdateStatusOptions {
 
 // Type definition for BaseCredentialStatusManager constructor method input
 export interface BaseCredentialStatusManagerOptions {
-  siteUrl?: string;
+  statusCredentialSiteOrigin: string;
   statusCredentialTableName?: string;
   configTableName?: string;
   eventTableName?: string;
@@ -121,10 +110,6 @@ export interface BaseCredentialStatusManagerOptions {
   didWebUrl?: string;
   signUserCredential?: boolean;
   signStatusCredential?: boolean;
-  awsRegion?: AwsRegion;
-  awsElasticBeanstalkAppName?: string;
-  awsElasticBeanstalkEnvName?: string;
-  awsS3BucketName?: string;
 }
 
 // Minimal set of options required for configuring BaseCredentialStatusManager
@@ -137,7 +122,7 @@ export const BASE_MANAGER_REQUIRED_OPTIONS: Array<keyof BaseCredentialStatusMana
 
 // Base class for database clients
 export abstract class BaseCredentialStatusManager {
-  protected siteUrl?: string;
+  protected readonly statusCredentialSiteOrigin: string;
   protected readonly statusCredentialTableName: string;
   protected readonly configTableName: string;
   protected readonly eventTableName: string;
@@ -154,14 +139,10 @@ export abstract class BaseCredentialStatusManager {
   protected readonly didWebUrl?: string;
   protected readonly signUserCredential: boolean;
   protected readonly signStatusCredential: boolean;
-  protected readonly awsRegion?: AwsRegion;
-  protected readonly awsElasticBeanstalkAppName?: string;
-  protected readonly awsElasticBeanstalkEnvName?: string;
-  protected readonly awsS3BucketName?: string;
 
   constructor(options: BaseCredentialStatusManagerOptions) {
     const {
-      siteUrl,
+      statusCredentialSiteOrigin,
       statusCredentialTableName,
       configTableName,
       eventTableName,
@@ -176,13 +157,9 @@ export abstract class BaseCredentialStatusManager {
       didSeed,
       didWebUrl,
       signUserCredential,
-      signStatusCredential,
-      awsRegion,
-      awsElasticBeanstalkAppName,
-      awsElasticBeanstalkEnvName,
-      awsS3BucketName
+      signStatusCredential
     } = options;
-    this.siteUrl = siteUrl;
+    this.statusCredentialSiteOrigin = statusCredentialSiteOrigin;
     this.statusCredentialTableName = statusCredentialTableName ?? 'StatusCredential';
     this.configTableName = configTableName ?? 'Config';
     this.eventTableName = eventTableName ?? 'Event';
@@ -198,10 +175,6 @@ export abstract class BaseCredentialStatusManager {
     this.didWebUrl = didWebUrl;
     this.signUserCredential = signUserCredential ?? false;
     this.signStatusCredential = signStatusCredential ?? false;
-    this.awsRegion = awsRegion!;
-    this.awsElasticBeanstalkAppName = awsElasticBeanstalkAppName!;
-    this.awsElasticBeanstalkEnvName = awsElasticBeanstalkEnvName!;
-    this.awsS3BucketName = awsS3BucketName!;
     this.validateConfiguration(options);
   }
 
@@ -283,7 +256,7 @@ export abstract class BaseCredentialStatusManager {
       const { statusCredentialId, credentialStatusIndex } = event;
 
       // attach credential status
-      const statusCredentialUrl = `${this.siteUrl}/${statusCredentialId}`;
+      const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${statusCredentialId}`;
       const credentialStatusId = `${statusCredentialUrl}#${credentialStatusIndex}`;
       const credentialStatus = {
         id: credentialStatusId,
@@ -317,7 +290,7 @@ export abstract class BaseCredentialStatusManager {
     latestCredentialsIssuedCounter++;
 
     // attach credential status
-    const statusCredentialUrl = `${this.siteUrl}/${latestStatusCredentialId}`;
+    const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
     const credentialStatusIndex = latestCredentialsIssuedCounter;
     const credentialStatusId = `${statusCredentialUrl}#${credentialStatusIndex}`;
     const credentialStatus = {
@@ -379,7 +352,7 @@ export abstract class BaseCredentialStatusManager {
       // create new status credential only if the last one has reached capacity
       if (newStatusCredential) {
         // create status credential
-        const statusCredentialUrl = `${this.siteUrl}/${latestStatusCredentialId}`;
+        const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
         let statusCredential = await composeStatusCredential({
           issuerDid,
           credentialId: statusCredentialUrl
@@ -518,7 +491,7 @@ export abstract class BaseCredentialStatusManager {
               `${Object.values(CredentialState).map(s => `"${s}"`).join(', ')}.`
           });
       }
-      const statusCredentialUrl = `${this.siteUrl}/${statusCredentialId}`;
+      const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${statusCredentialId}`;
       let statusCredential = await composeStatusCredential({
         issuerDid,
         credentialId: statusCredentialUrl,
@@ -578,35 +551,6 @@ export abstract class BaseCredentialStatusManager {
 
     return event;
   }
-
-  // deploys website to host status credential
-  async deployStatusCredentialWebsite(service: SiteService): Promise<void> {
-    let siteDeployer: BaseStatusCredentialSiteDeployer;
-    const baseOptions: BaseStatusCredentialSiteDeployerOptions = {
-      DB_SERVICE: this.databaseService,
-      DB_NAME: this.databaseName,
-      DB_URL: await this.getDatabaseUrl(),
-      DB_STATUS_CRED_TABLE_NAME: this.statusCredentialTableName
-    };
-    switch (service) {
-      case SiteService.AWS:
-        siteDeployer = new AwsStatusCredentialSiteDeployer({
-          ...baseOptions,
-          awsRegion: this.awsRegion!,
-          awsElasticBeanstalkAppName: this.awsElasticBeanstalkAppName!,
-          awsElasticBeanstalkEnvName: this.awsElasticBeanstalkEnvName!,
-          awsS3BucketName: this.awsS3BucketName!
-        });
-        break;
-      default:
-        throw new BadRequestError({
-          message:
-            '"service" must be one of the following values: ' +
-            `${Object.values(SiteService).map(s => `"${s}"`).join(', ')}.`
-        });
-    }
-    this.siteUrl = await siteDeployer.run();
-  };
 
   // retrieves database URL
   abstract getDatabaseUrl(): Promise<string>;
@@ -674,7 +618,7 @@ export abstract class BaseCredentialStatusManager {
     await this.createConfig(config, options);
 
     // create status credential
-    const statusCredentialUrl = `${this.siteUrl}/${statusCredentialId}`;
+    const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${statusCredentialId}`;
     let statusCredential = await composeStatusCredential({
       issuerDid,
       credentialId: statusCredentialUrl
@@ -770,10 +714,9 @@ export abstract class BaseCredentialStatusManager {
       // retrieve config data
       const {
         latestStatusCredentialId,
-        latestCredentialsIssuedCounter,
-        allCredentialsIssuedCounter
+        latestCredentialsIssuedCounter
       } = await this.getConfigRecord(options);
-      const statusCredentialUrl = `${this.siteUrl}/${latestStatusCredentialId}`;
+      const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
       const statusCredentials = await this.getAllStatusCredentials(options);
 
       // ensure status data is consistent
@@ -918,6 +861,9 @@ export abstract class BaseCredentialStatusManager {
         });
       }
     } catch (error: any) {
+      if (error instanceof ChildError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to get config ID: ${error.message}`
       });
@@ -944,6 +890,9 @@ export abstract class BaseCredentialStatusManager {
         });
       }
     } catch (error: any) {
+      if (error instanceof ChildError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to get status credential with ID "${statusCredentialId}": ${error.message}`
       });
@@ -959,9 +908,10 @@ export abstract class BaseCredentialStatusManager {
 
   // retrieves config by ID
   async getConfigRecord(options?: any): Promise<ConfigRecord> {
-    const configId = await this.getConfigId(options);
+    let configId;
     let record;
     try {
+      configId = await this.getConfigId(options);
       record = await this.getRecordById(this.configTableName, configId, options);
       if (!record) {
         throw new NotFoundError({
@@ -969,6 +919,9 @@ export abstract class BaseCredentialStatusManager {
         });
       }
     } catch (error: any) {
+      if (error instanceof ChildError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to get config with ID "${configId}": ${error.message}`
       });
@@ -977,21 +930,17 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves latest event featuring credential with given ID
-  async getLatestEventRecordForCredential(credentialId: string, options?: any): Promise<EventRecord> {
+  async getLatestEventRecordForCredential(credentialId: string, options?: any): Promise<EventRecord | null> {
     let eventRecord;
     try {
       const credentialEventRecord = await this.getRecordByField<CredentialEventRecord>(this.credentialEventTableName, 'credentialId', credentialId, options);
       if (!credentialEventRecord) {
-        throw new NotFoundError({
-          message: `Unable to find event for credential with ID "${credentialId}".`
-        });
+        return null;
       }
       const { eventId } = credentialEventRecord;
       eventRecord = await this.getRecordById(this.eventTableName, eventId, options);
       if (!eventRecord) {
-        throw new NotFoundError({
-          message: `Unable to find event with ID "${eventId}".`
-        });
+        return null;
       }
     } catch (error: any) {
       throw new InternalServerError({

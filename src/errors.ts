@@ -24,7 +24,7 @@ class BaseError extends Error {
   }
 }
 
-class ChildError extends BaseError {
+export class ChildError extends BaseError {
   constructor(options: ChildErrorOptions) {
     const { defaultMessage } = options;
     const message = `${options?.message ?? defaultMessage}`;

@@ -4,8 +4,7 @@
 import {
   BaseCredentialStatusManager,
   BaseCredentialStatusManagerOptions,
-  DatabaseService,
-  SiteService
+  DatabaseService
 } from './credential-status-manager-base.js';
 import {
   MongoDbCredentialStatusManager
@@ -21,10 +20,8 @@ import {
 
 // Type definition for base options of createStatusManager function input
 interface CredentialStatusManagerBaseOptions {
-  autoDeployDatabase?: boolean;
-  autoDeploySite?: boolean;
   databaseService: DatabaseService;
-  siteService: SiteService;
+  autoDeployDatabase?: boolean;
 }
 
 // Type definition for createStatusManager function input
@@ -35,18 +32,24 @@ type CredentialStatusManagerOptions = CredentialStatusManagerBaseOptions &
 export async function createStatusManager(options: CredentialStatusManagerOptions)
 : Promise<BaseCredentialStatusManager> {
   const {
-    autoDeployDatabase=true,
-    autoDeploySite=true,
+    statusCredentialSiteOrigin,
     databaseService,
-    siteService,
-    siteUrl,
     databaseUrl,
     databaseHost,
     databasePort,
     databaseUsername,
-    databasePassword
+    databasePassword,
+    autoDeployDatabase=true
   } = options;
   let statusManager: BaseCredentialStatusManager;
+
+  if (!statusCredentialSiteOrigin) {
+    throw new BadRequestError({
+      message:
+        '"statusCredentialSiteOrigin" must be configured in order ' +
+        'for verifiers to retrieve credential status during verification.'
+    });
+  }
 
   if (!databaseUrl && !(databaseHost && databasePort && databaseUsername && databasePassword)) {
     throw new BadRequestError({
@@ -69,14 +72,6 @@ export async function createStatusManager(options: CredentialStatusManagerOption
   }
 
   await statusManager.executeTransaction(async (options?: any) => {
-    // retrieve signing material
-    if (!autoDeploySite && !siteUrl) {
-      throw new BadRequestError({
-        message:
-          '"siteUrl" must be configured when "autoDeploySite" is false.'
-      });
-    }
-
     // retrieve relevant data from status database configuration
     const hasAccess = await statusManager.hasAuthority(databaseUsername, databasePassword, options);
     if (!hasAccess) {
@@ -131,11 +126,6 @@ export async function createStatusManager(options: CredentialStatusManagerOption
         // they are empty and autoDeployDatabase is not configured
         await statusManager.initializeDatabaseResources(options);
       }
-    }
-
-    // setup credential status website if autoDeploySite is configured
-    if (autoDeploySite) {
-      await statusManager.deployStatusCredentialWebsite(siteService);
     }
   });
 
