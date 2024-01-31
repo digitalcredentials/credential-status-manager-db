@@ -4,6 +4,7 @@
 import {
   BaseCredentialStatusManager,
   BaseCredentialStatusManagerOptions,
+  DatabaseConnectionOptions,
   DatabaseService
 } from './credential-status-manager-base.js';
 import {
@@ -71,13 +72,21 @@ export async function createStatusManager(options: CredentialStatusManagerOption
       });
   }
 
-  await statusManager.executeTransaction(async (options?: any) => {
-    // retrieve relevant data from status database configuration
-    const hasAccess = await statusManager.hasAuthority(databaseUsername, databasePassword, options);
+  await statusManager.executeTransaction(async (options?: DatabaseConnectionOptions) => {
+    // determine if client has access to this database instance
+    const hasAccess = await statusManager.hasAuthority({
+      databaseUrl,
+      databaseHost,
+      databasePort,
+      databaseUsername,
+      databasePassword,
+      ...options
+    });
     if (!hasAccess) {
       throw new InvalidCredentialsError({ statusManager });
     }
 
+    // determine if database instance exists
     let databaseExists;
     try {
       databaseExists = await statusManager.databaseExists(options);
