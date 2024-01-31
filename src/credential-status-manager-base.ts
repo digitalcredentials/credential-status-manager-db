@@ -92,6 +92,16 @@ interface UpdateStatusOptions {
   credentialStatus: CredentialState;
 }
 
+// Type definition for hasAuthority method input
+export interface DatabaseConnectionOptions {
+  databaseUrl?: string;
+  databaseHost?: string;
+  databasePort?: string;
+  databaseUsername?: string;
+  databasePassword?: any;
+  [x: string]: any;
+}
+
 // Type definition for BaseCredentialStatusManager constructor method input
 export interface BaseCredentialStatusManagerOptions {
   statusCredentialSiteOrigin: string;
@@ -114,8 +124,6 @@ export interface BaseCredentialStatusManagerOptions {
 
 // Minimal set of options required for configuring BaseCredentialStatusManager
 export const BASE_MANAGER_REQUIRED_OPTIONS: Array<keyof BaseCredentialStatusManagerOptions> = [
-  'databaseUsername',
-  'databasePassword',
   'didMethod',
   'didSeed'
 ];
@@ -132,8 +140,8 @@ export abstract class BaseCredentialStatusManager {
   protected readonly databaseUrl?: string;
   protected readonly databaseHost?: string;
   protected readonly databasePort?: string;
-  protected databaseUsername: string;
-  protected databasePassword: string;
+  protected readonly databaseUsername: string;
+  protected readonly databasePassword: string;
   protected readonly didMethod: DidMethod;
   protected readonly didSeed: string;
   protected readonly didWebUrl?: string;
@@ -226,7 +234,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // embeds status into credential
-  async embedCredentialStatus({ credential, statusPurpose = 'revocation' }: EmbedCredentialStatusOptions, options?: any): Promise<EmbedCredentialStatusResult> {
+  async embedCredentialStatus({ credential, statusPurpose = 'revocation' }: EmbedCredentialStatusOptions, options?: DatabaseConnectionOptions): Promise<EmbedCredentialStatusResult> {
     // ensure that credential has ID
     if (!credential.id) {
       // Note: This assumes that uuid will never generate an ID that
@@ -316,7 +324,7 @@ export abstract class BaseCredentialStatusManager {
 
   // allocates status for credential in race-prone manner
   async allocateStatus(credential: VerifiableCredential): Promise<VerifiableCredential> {
-    return this.executeTransaction(async (options?: any) => {
+    return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // report error for compact JWT credentials
       if (typeof credential === 'string') {
         throw new BadRequestError({
@@ -428,7 +436,7 @@ export abstract class BaseCredentialStatusManager {
     credentialId,
     credentialStatus
   }: UpdateStatusOptions): Promise<VerifiableCredential> {
-    return this.executeTransaction(async (options?: any) => {
+    return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // retrieve latest relevant event for credential with given ID
       const oldEvent = await this.getLatestEventRecordForCredential(credentialId, options);
 
@@ -538,7 +546,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // checks status of credential with given ID
-  async checkStatus(credentialId: string, options?: any): Promise<EventRecord> {
+  async checkStatus(credentialId: string, options?: DatabaseConnectionOptions): Promise<EventRecord> {
     // retrieve latest relevant event for credential with given ID
     const event = await this.getLatestEventRecordForCredential(credentialId, options);
 
@@ -556,19 +564,19 @@ export abstract class BaseCredentialStatusManager {
   abstract getDatabaseUrl(): Promise<string>;
 
   // executes function as transaction
-  abstract executeTransaction(func: (options?: any) => Promise<any>): Promise<any>;
+  abstract executeTransaction(func: (options?: DatabaseConnectionOptions) => Promise<any>): Promise<any>;
 
   // checks if caller has authority to manage status based on authorization credentials
-  abstract hasAuthority(databaseUsername: string, databasePassword: string, options?: any): Promise<boolean>;
+  abstract hasAuthority(options?: DatabaseConnectionOptions): Promise<boolean>;
 
   // creates database
-  abstract createDatabase(options?: any): Promise<void>;
+  abstract createDatabase(options?: DatabaseConnectionOptions): Promise<void>;
 
   // creates database table
-  abstract createDatabaseTable(tableName: string, options?: any): Promise<void>;
+  abstract createDatabaseTable(tableName: string, options?: DatabaseConnectionOptions): Promise<void>;
 
   // creates database tables
-  async createDatabaseTables(options?: any): Promise<void> {
+  async createDatabaseTables(options?: DatabaseConnectionOptions): Promise<void> {
     const tableNames = this.getDatabaseTableNames();
     for (const tableName of tableNames) {
       try {
@@ -582,7 +590,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // creates database resources
-  async createDatabaseResources(options?: any): Promise<void> {
+  async createDatabaseResources(options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createDatabase(options);
     } catch (error: any) {
@@ -594,7 +602,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // initializes database resources
-  async initializeDatabaseResources(options?: any): Promise<void> {
+  async initializeDatabaseResources(options?: DatabaseConnectionOptions): Promise<void> {
     // retrieve signing material
     const {
       didMethod,
@@ -642,13 +650,13 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // checks if database exists
-  abstract databaseExists(options?: any): Promise<boolean>;
+  abstract databaseExists(options?: DatabaseConnectionOptions): Promise<boolean>;
 
   // checks if database table exists
-  abstract databaseTableExists(tableName: string, options?: any): Promise<boolean>;
+  abstract databaseTableExists(tableName: string, options?: DatabaseConnectionOptions): Promise<boolean>;
 
   // checks if database tables exist
-  async databaseTablesExist(options?: any): Promise<boolean> {
+  async databaseTablesExist(options?: DatabaseConnectionOptions): Promise<boolean> {
     const tableNames = this.getDatabaseTableNames();
     const config = await this.getConfigRecord(options);
     for (const tableName of tableNames) {
@@ -677,10 +685,10 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // checks if database table is empty
-  abstract databaseTableEmpty(tableName: string, options?: any): Promise<boolean>;
+  abstract databaseTableEmpty(tableName: string, options?: DatabaseConnectionOptions): Promise<boolean>;
 
   // checks if database tables are empty
-  async databaseTablesEmpty(options?: any): Promise<boolean> {
+  async databaseTablesEmpty(options?: DatabaseConnectionOptions): Promise<boolean> {
     const tableNames = this.getDatabaseTableNames();
     const config = await this.getConfigRecord(options);
     for (const tableName of tableNames) {
@@ -709,7 +717,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // checks if database tables are properly configured
-  async databaseTablesProperlyConfigured(options?: any): Promise<boolean> {
+  async databaseTablesProperlyConfigured(options?: DatabaseConnectionOptions): Promise<boolean> {
     try {
       // retrieve config data
       const {
@@ -762,10 +770,10 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // creates single database record
-  abstract createRecord<T>(tableName: string, record: T, options?: any): Promise<void>;
+  abstract createRecord<T>(tableName: string, record: T, options?: DatabaseConnectionOptions): Promise<void>;
 
   // creates status credential
-  async createStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: any): Promise<void> {
+  async createStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.statusCredentialTableName, statusCredentialRecord, options);
     } catch (error: any) {
@@ -776,7 +784,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // creates config
-  async createConfig(config: ConfigRecord, options?: any): Promise<void> {
+  async createConfig(config: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.configTableName, config, options);
     } catch (error: any) {
@@ -787,7 +795,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // creates event
-  async createEvent(event: EventRecord, options?: any): Promise<void> {
+  async createEvent(event: EventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.eventTableName, event, options);
     } catch (error: any) {
@@ -798,7 +806,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // creates credential event
-  async createCredentialEvent(credentialEvent: CredentialEventRecord, options?: any): Promise<void> {
+  async createCredentialEvent(credentialEvent: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.credentialEventTableName, credentialEvent, options);
     } catch (error: any) {
@@ -809,10 +817,10 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // updates single database record
-  abstract updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: any): Promise<void>;
+  abstract updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: DatabaseConnectionOptions): Promise<void>;
 
   // updates status credential
-  async updateStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: any): Promise<void> {
+  async updateStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { id } = statusCredentialRecord;
       await this.updateRecord(this.statusCredentialTableName, 'id', id, statusCredentialRecord, options);
@@ -824,7 +832,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // updates config
-  async updateConfig(config: ConfigRecord, options?: any): Promise<void> {
+  async updateConfig(config: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { id } = config;
       await this.updateRecord(this.configTableName, 'id', id, config, options);
@@ -836,7 +844,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // updates credential event
-  async updateCredentialEvent(credentialEvent: CredentialEventRecord, options?: any): Promise<void> {
+  async updateCredentialEvent(credentialEvent: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { credentialId } = credentialEvent;
       await this.updateRecord(this.credentialEventTableName, 'credentialId', credentialId, credentialEvent, options);
@@ -848,10 +856,10 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves any database record
-  abstract getAnyRecord<T>(tableName: string, options?: any): Promise<T | null>;
+  abstract getAnyRecord<T>(tableName: string, options?: DatabaseConnectionOptions): Promise<T | null>;
 
   // retrieves config ID
-  async getConfigId(options?: any): Promise<string> {
+  async getConfigId(options?: DatabaseConnectionOptions): Promise<string> {
     let record;
     try {
       record = await this.getAnyRecord(this.configTableName, options);
@@ -872,15 +880,15 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves single database record by field
-  abstract getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: any): Promise<T | null>;
+  abstract getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: DatabaseConnectionOptions): Promise<T | null>;
 
   // retrieves single database record by id
-  async getRecordById<T>(tableName: string, id: string, options?: any): Promise<T | null> {
+  async getRecordById<T>(tableName: string, id: string, options?: DatabaseConnectionOptions): Promise<T | null> {
     return this.getRecordByField(tableName, 'id', id, options);
   }
 
   // retrieves status credential record by ID
-  async getStatusCredentialRecordById(statusCredentialId: string, options?: any): Promise<StatusCredentialRecord> {
+  async getStatusCredentialRecordById(statusCredentialId: string, options?: DatabaseConnectionOptions): Promise<StatusCredentialRecord> {
     let record;
     try {
       record = await this.getRecordById(this.statusCredentialTableName, statusCredentialId, options);
@@ -901,13 +909,13 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves status credential by ID
-  async getStatusCredential(statusCredentialId: string, options?: any): Promise<VerifiableCredential> {
+  async getStatusCredential(statusCredentialId: string, options?: DatabaseConnectionOptions): Promise<VerifiableCredential> {
     const { credential } = await this.getStatusCredentialRecordById(statusCredentialId, options);
     return credential as VerifiableCredential;
   }
 
   // retrieves config by ID
-  async getConfigRecord(options?: any): Promise<ConfigRecord> {
+  async getConfigRecord(options?: DatabaseConnectionOptions): Promise<ConfigRecord> {
     let configId;
     let record;
     try {
@@ -930,7 +938,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves latest event featuring credential with given ID
-  async getLatestEventRecordForCredential(credentialId: string, options?: any): Promise<EventRecord | null> {
+  async getLatestEventRecordForCredential(credentialId: string, options?: DatabaseConnectionOptions): Promise<EventRecord | null> {
     let eventRecord;
     try {
       const credentialEventRecord = await this.getRecordByField<CredentialEventRecord>(this.credentialEventTableName, 'credentialId', credentialId, options);
@@ -951,20 +959,20 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves all records in table
-  abstract getAllRecords<T>(tableName: string, options?: any): Promise<T[]>;
+  abstract getAllRecords<T>(tableName: string, options?: DatabaseConnectionOptions): Promise<T[]>;
 
   // retrieves all status credential records
-  async getAllStatusCredentialRecords(options?: any): Promise<StatusCredentialRecord[]> {
+  async getAllStatusCredentialRecords(options?: DatabaseConnectionOptions): Promise<StatusCredentialRecord[]> {
     return this.getAllRecords(this.statusCredentialTableName, options);
   }
 
   // retrieves all credential event records
-  async getAllCredentialEventRecords(options?: any): Promise<EventRecord[]> {
+  async getAllCredentialEventRecords(options?: DatabaseConnectionOptions): Promise<EventRecord[]> {
     return this.getAllRecords(this.credentialEventTableName, options);
   }
 
   // retrieves all credential IDs
-  async getAllCredentialIds(options?: any): Promise<string[]> {
+  async getAllCredentialIds(options?: DatabaseConnectionOptions): Promise<string[]> {
     let credentialIds = [];
     try {
       const credentialEventRecords = await this.getAllCredentialEventRecords(options);
@@ -978,7 +986,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves all status credentials
-  async getAllStatusCredentials(options?: any): Promise<VerifiableCredential[]> {
+  async getAllStatusCredentials(options?: DatabaseConnectionOptions): Promise<VerifiableCredential[]> {
     let statusCredentials = [];
     try {
       const statusCredentialRecords = await this.getAllStatusCredentialRecords(options);

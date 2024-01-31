@@ -7,6 +7,7 @@ interface BaseErrorOptions {
 interface ChildErrorOptions {
   message?: string;
   defaultMessage: string;
+  code: number;
 }
 
 interface CustomErrorOptions {
@@ -25,10 +26,13 @@ class BaseError extends Error {
 }
 
 export class ChildError extends BaseError {
+  public code: number;
+
   constructor(options: ChildErrorOptions) {
-    const { defaultMessage } = options;
+    const { defaultMessage, code } = options;
     const message = `${options?.message ?? defaultMessage}`;
     super({ message });
+    this.code = code;
   }
 }
 
@@ -36,7 +40,7 @@ export class BadRequestError extends ChildError {
   constructor(options?: CustomErrorOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'That is an invalid request.';
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 400 });
   }
 }
 
@@ -44,7 +48,7 @@ export class NotFoundError extends ChildError {
   constructor(options?: CustomErrorOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'Resource not found.';
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 404 });
   }
 }
 
@@ -52,7 +56,7 @@ export class InternalServerError extends ChildError {
   constructor(options?: CustomErrorOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'The service encountered an internal error while processing your request.';
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 500 });
   }
 }
 
@@ -60,7 +64,7 @@ export class InvalidStateError extends ChildError {
   constructor(options?: CustomErrorOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'The internal data has reached an invalid state.';
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 500 });
   }
 }
 
@@ -68,7 +72,7 @@ export class InvalidDidSeedError extends ChildError {
   constructor(options?: CustomErrorOptions) {
     const { message } = options ?? {};
     const defaultMessage = '"didSeed" must be a multibase-encoded value with at least 32 bytes.';
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 400 });
   }
 }
 
@@ -76,7 +80,7 @@ export class InvalidCredentialsError extends ChildError {
   constructor(options?: CustomErrorOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'The username/password combination you are using to access the database is invalid.';
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 401 });
   }
 }
 
@@ -85,7 +89,7 @@ export class MissingDatabaseError extends ChildError {
     const { statusManager, message } = options ?? {};
     const databaseName = statusManager?.getDatabaseName();
     const defaultMessage = `The database named "${databaseName}" must be manually created in advance.`;
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 400 });
   }
 }
 
@@ -102,6 +106,6 @@ export class MissingDatabaseTableError extends ChildError {
       ' However, the following tables have not yet been created: ' +
       `${missingTables?.map(t => `"${t}"`).join(', ')}.` :
       '';
-    super({ message, defaultMessage });
+    super({ message, defaultMessage, code: 400 });
   }
 }

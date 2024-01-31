@@ -11,20 +11,23 @@ import {
 import {
   BaseCredentialStatusManager,
   BaseCredentialStatusManagerOptions,
+  DatabaseConnectionOptions,
   DatabaseService
 } from './credential-status-manager-base.js';
+import { BadRequestError } from './errors.js';
 
-// Type definition for database connection
+// Type definition for MongoDB connection
 interface MongoDbConnection {
   client: MongoClient;
   database: Db;
 }
 
-// Type definition for database connection
-interface MongoDbTransactionOptions {
-  client: MongoClient;
-  session: ClientSession;
-}
+// Type definition for the input of the function passed to
+// MongoDB's implementation of executeTransaction
+type MongoDbConnectionOptions = DatabaseConnectionOptions & {
+  client?: MongoClient;
+  session?: ClientSession;
+};
 
 // Implementation of BaseCredentialStatusManager for MongoDB
 export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager {
@@ -33,17 +36,34 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     this.databaseService = DatabaseService.MongoDB;
   }
 
-  // retrieves database URL
-  async getDatabaseUrl(): Promise<string> {
-    if (this.databaseUrl) {
-      return this.databaseUrl;
+  // helper method for getDatabaseUrl
+  async getDatabaseUrlHelper(options?: MongoDbConnectionOptions): Promise<string> {
+    const {
+      databaseUrl,
+      databaseHost,
+      databasePort,
+      databaseUsername,
+      databasePassword
+    } = options ?? {};
+
+    if (databaseUrl) {
+      return databaseUrl;
     }
+
+    if (!(databaseHost && databasePort && databaseUsername && databasePassword)) {
+      throw new BadRequestError({
+        message:
+          'The caller must either provide a value for "databaseUrl" or a value each for ' +
+          `"databaseHost", "databasePort", "databaseUsername", and "databasePassword".`
+      });
+    }
+
     return new Promise((resolve, reject) => {
-      dns.resolveSrv(`_mongodb._tcp.${this.databaseHost}`, (error, records) => {
+      dns.resolveSrv(`_mongodb._tcp.${databaseHost}`, (error, records) => {
         if (error) {
           if (error.code === 'ENODATA' || error.code === 'ENOTFOUND') {
             // SRV records not found
-            resolve(`mongodb://${this.databaseUsername}:${this.databasePassword}@${this.databaseHost}:${this.databasePort}?retryWrites=false`);
+            resolve(`mongodb://${databaseUsername}:${databasePassword}@${databaseHost}:${databasePort}?retryWrites=false`);
           } else {
             // other DNS-related error
             reject(error);
@@ -51,33 +71,51 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
         } else {
           if (records.length > 0) {
             // SRV records found
-            resolve(`mongodb+srv://${this.databaseUsername}:${this.databasePassword}@${this.databaseHost}?retryWrites=false`);
+            resolve(`mongodb+srv://${databaseUsername}:${databasePassword}@${databaseHost}?retryWrites=false`);
           } else {
             // SRV records not found
-            resolve(`mongodb://${this.databaseUsername}:${this.databasePassword}@${this.databaseHost}:${this.databasePort}?retryWrites=false`);
+            resolve(`mongodb://${databaseUsername}:${databasePassword}@${databaseHost}:${databasePort}?retryWrites=false`);
           }
         }
       }); 
     });
   }
 
+  // retrieve database URL
+  async getDatabaseUrl(options?: MongoDbConnectionOptions): Promise<string> {
+    const optionsObject = options ?? {};
+
+    if (!Object.entries(optionsObject).length) {
+      return this.getDatabaseUrlHelper({
+        databaseUrl: this.databaseUrl,
+        databaseHost: this.databaseHost,
+        databasePort: this.databasePort,
+        databaseUsername: this.databaseUsername,
+        databasePassword: this.databasePassword
+      });
+    }
+
+    return this.getDatabaseUrlHelper(options);
+  }
+
   // retrieve database client
-  async getDatabaseClient() {
+  async getDatabaseClient(options?: MongoDbConnectionOptions) {
     // get database URL
-    const databaseUrl = await this.getDatabaseUrl();
+    const databaseUrl = await this.getDatabaseUrl(options);
     // create fresh MongoDB client
     const client = new MongoClient(databaseUrl);
     return client;
   }
 
   // connects to database
-  async connectDatabase(client?: MongoClient): Promise<MongoDbConnection> {
+  async connectDatabase(options?: MongoDbConnectionOptions): Promise<MongoDbConnection> {
+    const { client } = options ?? {};
     if (client) {
       await client.connect();
       const database = client.db(this.databaseName);
       return { client, database };
     }
-    const newClient = await this.getDatabaseClient();
+    const newClient = await this.getDatabaseClient(options);
     await newClient.connect();
     const database = newClient.db(this.databaseName);
     return { client: newClient, database };
@@ -91,7 +129,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // executes function as transaction
-  async executeTransaction(func: (options?: MongoDbTransactionOptions) => Promise<any>): Promise<any> {
+  async executeTransaction(func: (options?: MongoDbConnectionOptions) => Promise<any>): Promise<any> {
     const { client } = await this.connectDatabase();
     const session = client.startSession();
     const transactionOptions: TransactionOptions = {
@@ -113,13 +151,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // checks if caller has authority to manage status based on authorization credentials
-  async hasAuthority(databaseUsername: string, databasePassword: string, options?: MongoDbTransactionOptions): Promise<boolean> {
-    const { client: clientCandidate, session } = options ?? {};
-    this.databaseUsername = databaseUsername;
-    this.databasePassword = databasePassword;
-    let client;
+  async hasAuthority(options?: MongoDbConnectionOptions): Promise<boolean> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       await database.command({ ping: 1 });
@@ -136,18 +173,19 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
 
   // creates database
   // (databases are implicitly created in MongoDB)
-  async createDatabase(options?: MongoDbTransactionOptions): Promise<void> {}
+  async createDatabase(options?: MongoDbConnectionOptions): Promise<void> {}
 
   // creates database table
   // (database tables are implicitly created in MongoDB)
-  async createDatabaseTable(tableName: string, options?: MongoDbTransactionOptions): Promise<void> {}
+  async createDatabaseTable(tableName: string, options?: MongoDbConnectionOptions): Promise<void> {}
 
   // checks if database exists
-  async databaseExists(options?: MongoDbTransactionOptions): Promise<boolean> {
-    const { client: clientCandidate, session } = options ?? {};
-    let client;
+  async databaseExists(options?: MongoDbConnectionOptions): Promise<boolean> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(this.configTableName);
@@ -167,11 +205,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // checks if database table exists
-  async databaseTableExists(tableName: string, options?: MongoDbTransactionOptions): Promise<boolean> {
-    const { client: clientCandidate, session } = options ?? {};
-    let client;
+  async databaseTableExists(tableName: string, options?: MongoDbConnectionOptions): Promise<boolean> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
@@ -186,11 +225,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // checks if database table is empty
-  async databaseTableEmpty(tableName: string, options?: MongoDbTransactionOptions): Promise<boolean> {
-    const { client: clientCandidate, session } = options ?? {};
-    let client;
+  async databaseTableEmpty(tableName: string, options?: MongoDbConnectionOptions): Promise<boolean> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
@@ -206,11 +246,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // creates single database record
-  async createRecord<T>(tableName: string, record: T, options?: MongoDbTransactionOptions): Promise<void> {
-    const { client: clientCandidate, session } = options ?? {};
-    let client;
+  async createRecord<T>(tableName: string, record: T, options?: MongoDbConnectionOptions): Promise<void> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
@@ -224,11 +265,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // updates single database record
-  async updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: MongoDbTransactionOptions): Promise<void> {
-    const { client: clientCandidate, session } = options ?? {};
-    let client;
+  async updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: MongoDbConnectionOptions): Promise<void> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
@@ -243,12 +285,13 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // retrieves any database record
-  async getAnyRecord<T>(tableName: string, options?: MongoDbTransactionOptions): Promise<T | null> {
-    const { client: clientCandidate, session } = options ?? {};
+  async getAnyRecord<T>(tableName: string, options?: MongoDbConnectionOptions): Promise<T | null> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     let record;
-    let client;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
@@ -264,12 +307,13 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // retrieves single database record by field
-  async getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: MongoDbTransactionOptions): Promise<T | null> {
-    const { client: clientCandidate, session } = options ?? {};
+  async getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: MongoDbConnectionOptions): Promise<T | null> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     let record;
-    let client;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
@@ -285,12 +329,13 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // retrieves all records in table
-  async getAllRecords<T>(tableName: string, options?: MongoDbTransactionOptions): Promise<T[]> {
-    const { client: clientCandidate, session } = options ?? {};
+  async getAllRecords<T>(tableName: string, options?: MongoDbConnectionOptions): Promise<T[]> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
     let records = [];
-    let client;
     try {
-      const databaseConnection = await this.connectDatabase(clientCandidate);
+      const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
