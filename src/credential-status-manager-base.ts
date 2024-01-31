@@ -92,7 +92,7 @@ interface UpdateStatusOptions {
   credentialStatus: CredentialState;
 }
 
-// Type definition for hasAuthority method input
+// Type definition for database connection options
 export interface DatabaseConnectionOptions {
   databaseUrl?: string;
   databaseHost?: string;
