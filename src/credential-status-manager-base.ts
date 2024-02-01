@@ -5,7 +5,7 @@ import { CONTEXT_URL_V1 } from '@digitalbazaar/vc-status-list-context';
 import { VerifiableCredential } from '@digitalcredentials/vc-data-model';
 import { createCredential, createList, decodeList } from '@digitalcredentials/vc-status-list';
 import { v4 as uuid } from 'uuid';
-import { BadRequestError, ChildError, InternalServerError, NotFoundError } from './errors.js';
+import { BadRequestError, CustomError, InternalServerError, NotFoundError } from './errors.js';
 import {
   DidMethod,
   deriveStatusCredentialId,
@@ -869,7 +869,7 @@ export abstract class BaseCredentialStatusManager {
         });
       }
     } catch (error: any) {
-      if (error instanceof ChildError) {
+      if (error instanceof CustomError) {
         throw error;
       }
       throw new InternalServerError({
@@ -898,7 +898,7 @@ export abstract class BaseCredentialStatusManager {
         });
       }
     } catch (error: any) {
-      if (error instanceof ChildError) {
+      if (error instanceof CustomError) {
         throw error;
       }
       throw new InternalServerError({
@@ -927,7 +927,7 @@ export abstract class BaseCredentialStatusManager {
         });
       }
     } catch (error: any) {
-      if (error instanceof ChildError) {
+      if (error instanceof CustomError) {
         throw error;
       }
       throw new InternalServerError({
