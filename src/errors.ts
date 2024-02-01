@@ -1,91 +1,78 @@
 import { BaseCredentialStatusManager } from './credential-status-manager-base.js';
 
-interface BaseErrorOptions {
-  message: string;
-}
-
-interface ChildErrorOptions {
-  message?: string;
-  defaultMessage: string;
-  code: number;
-}
-
-interface CustomErrorOptions {
+interface CustomErrorOptionalOptions {
   statusManager?: BaseCredentialStatusManager;
   message?: string;
 }
 
-class BaseError extends Error {
-  public message: string;
-
-  constructor(options: BaseErrorOptions) {
-    const { message } = options;
-    super(message);
-    this.message = message;
-  }
+interface CustomErrorRequiredOptions {
+  defaultMessage: string;
+  code: number;
 }
 
-export class ChildError extends BaseError {
+type CustomErrorOptions = CustomErrorOptionalOptions & CustomErrorRequiredOptions;
+
+export class CustomError extends Error {
   public code: number;
 
-  constructor(options: ChildErrorOptions) {
+  constructor(options: CustomErrorOptions) {
     const { defaultMessage, code } = options;
     const message = `${options?.message ?? defaultMessage}`;
-    super({ message });
+    super(message);
     this.code = code;
   }
 }
 
-export class BadRequestError extends ChildError {
-  constructor(options?: CustomErrorOptions) {
+export class BadRequestError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'That is an invalid request.';
     super({ message, defaultMessage, code: 400 });
   }
 }
 
-export class NotFoundError extends ChildError {
-  constructor(options?: CustomErrorOptions) {
+export class NotFoundError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'Resource not found.';
     super({ message, defaultMessage, code: 404 });
   }
 }
 
-export class InternalServerError extends ChildError {
-  constructor(options?: CustomErrorOptions) {
+export class InternalServerError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'The service encountered an internal error while processing your request.';
     super({ message, defaultMessage, code: 500 });
   }
 }
 
-export class InvalidStateError extends ChildError {
-  constructor(options?: CustomErrorOptions) {
+export class InvalidStateError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
     const defaultMessage = 'The internal data has reached an invalid state.';
     super({ message, defaultMessage, code: 500 });
   }
 }
 
-export class InvalidDidSeedError extends ChildError {
-  constructor(options?: CustomErrorOptions) {
+export class InvalidDidSeedError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
     const defaultMessage = '"didSeed" must be a multibase-encoded value with at least 32 bytes.';
     super({ message, defaultMessage, code: 400 });
   }
 }
 
-export class InvalidCredentialsError extends ChildError {
-  constructor(options?: CustomErrorOptions) {
+export class InvalidCredentialsError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
-    const defaultMessage = 'The username/password combination you are using to access the database is invalid.';
+    const defaultMessage = 'The user credentials you are using to access the database is invalid.';
     super({ message, defaultMessage, code: 401 });
   }
 }
 
-export class MissingDatabaseError extends ChildError {
-  constructor(options?: CustomErrorOptions) {
+export class MissingDatabaseError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
     const { statusManager, message } = options ?? {};
     const databaseName = statusManager?.getDatabaseName();
     const defaultMessage = `The database named "${databaseName}" must be manually created in advance.`;
@@ -93,10 +80,10 @@ export class MissingDatabaseError extends ChildError {
   }
 }
 
-type MissingDatabaseTableErrorOptions = CustomErrorOptions & {
+type MissingDatabaseTableErrorOptions = CustomErrorOptionalOptions & {
   missingTables?: string[];
 }
-export class MissingDatabaseTableError extends ChildError {
+export class MissingDatabaseTableError extends CustomError {
   constructor(options?: MissingDatabaseTableErrorOptions) {
     const { statusManager, message, missingTables } = options ?? {};
     const databaseTableNames = statusManager?.getDatabaseTableNames();
