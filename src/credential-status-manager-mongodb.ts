@@ -130,23 +130,31 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
 
   // executes function as transaction
   async executeTransaction(func: (options?: MongoDbConnectionOptions) => Promise<any>): Promise<any> {
-    const { client } = await this.connectDatabase();
-    const session = client.startSession();
-    const transactionOptions: TransactionOptions = {
-      readPreference: ReadPreference.primary,
-      readConcern: { level: ReadConcernLevel.majority },
-      writeConcern: { w: 'majority' },
-      maxTimeMS: 30000
-    };
-    try {
-      const result = await session.withTransaction(async () => {
-        const result = await func({ client, session });
-        return result;
-      }, transactionOptions);
-      return result;
-    } finally {
-      await session.endSession();
-      await this.disconnectDatabase(client);
+    let success = false;
+    while (!success) {
+      const { client } = await this.connectDatabase();
+      const session = client.startSession();
+      const transactionOptions: TransactionOptions = {
+        readPreference: ReadPreference.primary,
+        readConcern: { level: ReadConcernLevel.majority },
+        writeConcern: { w: 'majority' },
+        maxTimeMS: 30000
+      };
+      try {
+        const finalResult = await session.withTransaction(async () => {
+          const funcResult = await func({ client, session });
+          success = true;
+          return funcResult;
+        }, transactionOptions);
+        success = true;
+        return finalResult;
+      } catch (error) {
+        const delay = Math.floor(Math.random() * 1000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } finally {
+        await session.endSession();
+        await this.disconnectDatabase(client);
+      }
     }
   }
 
