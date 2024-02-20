@@ -47,10 +47,18 @@ export class InternalServerError extends CustomError {
   }
 }
 
-export class InvalidStateError extends CustomError {
+export class WriteConflictError extends CustomError {
   constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
-    const defaultMessage = 'The internal data has reached an invalid state.';
+    const defaultMessage = 'This operation conflicted with another operation.';
+    super({ message, defaultMessage, code: 409 });
+  }
+}
+
+export class InvalidDatabaseStateError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
+    const { message } = options ?? {};
+    const defaultMessage = 'The status database has an invalid state.';
     super({ message, defaultMessage, code: 500 });
   }
 }

@@ -5,7 +5,14 @@ import { CONTEXT_URL_V1 } from '@digitalbazaar/vc-status-list-context';
 import { VerifiableCredential } from '@digitalcredentials/vc-data-model';
 import { createCredential, createList, decodeList } from '@digitalcredentials/vc-status-list';
 import { v4 as uuid } from 'uuid';
-import { BadRequestError, CustomError, InternalServerError, NotFoundError } from './errors.js';
+import {
+  BadRequestError,
+  CustomError,
+  InternalServerError,
+  InvalidDatabaseStateError,
+  NotFoundError,
+  WriteConflictError
+} from './errors.js';
 import {
   DidMethod,
   deriveStatusCredentialId,
@@ -48,6 +55,7 @@ interface EventRecord {
 // Type definition for credential status config
 export interface ConfigRecord {
   id: string;
+  statusCredentialSiteOrigin: string;
   latestStatusCredentialId: string;
   latestCredentialsIssuedCounter: number;
   allCredentialsIssuedCounter: number;
@@ -90,6 +98,12 @@ type EmbedCredentialStatusResult = ConfigRecord & {
 interface UpdateStatusOptions {
   credentialId: string;
   credentialStatus: CredentialState;
+}
+
+// Type definition for getDatabaseState method output
+interface GetDatabaseStateResult {
+  valid: boolean;
+  error?: InvalidDatabaseStateError;
 }
 
 // Type definition for database connection options
@@ -191,7 +205,7 @@ export abstract class BaseCredentialStatusManager {
     const missingOptions = [] as
       Array<keyof BaseCredentialStatusManagerOptions>;
 
-    const isProperlyConfigured = BASE_MANAGER_REQUIRED_OPTIONS.every(
+    const hasValidConfiguration = BASE_MANAGER_REQUIRED_OPTIONS.every(
       (option: keyof BaseCredentialStatusManagerOptions) => {
         if (!options[option]) {
           missingOptions.push(option as any);
@@ -200,7 +214,7 @@ export abstract class BaseCredentialStatusManager {
       }
     );
 
-    if (!isProperlyConfigured) {
+    if (!hasValidConfiguration) {
       throw new BadRequestError({
         message:
           'You have neglected to set the following required options ' +
@@ -242,14 +256,15 @@ export abstract class BaseCredentialStatusManager {
       credential.id = uuid();
     }
 
-    // ensure that credential contains the proper status credential context
+    // ensure that credential contains valid status credential context
     if (!credential['@context'].includes(CONTEXT_URL_V1)) {
       credential['@context'].push(CONTEXT_URL_V1);
     }
 
-    // retrieve config data
+    // retrieve config
     let {
       id,
+      statusCredentialSiteOrigin,
       latestStatusCredentialId,
       latestCredentialsIssuedCounter,
       allCredentialsIssuedCounter
@@ -260,7 +275,7 @@ export abstract class BaseCredentialStatusManager {
 
     // do not allocate new entry if ID is already being tracked
     if (event) {
-      // retrieve relevant event data
+      // retrieve relevant event
       const { statusCredentialId, credentialStatusIndex } = event;
 
       // attach credential status
@@ -281,6 +296,7 @@ export abstract class BaseCredentialStatusManager {
           credentialStatus
         },
         newStatusCredential: false,
+        statusCredentialSiteOrigin,
         latestStatusCredentialId,
         latestCredentialsIssuedCounter,
         allCredentialsIssuedCounter
@@ -293,8 +309,8 @@ export abstract class BaseCredentialStatusManager {
       newStatusCredential = true;
       latestCredentialsIssuedCounter = 0;
       latestStatusCredentialId = generateStatusCredentialId();
-      allCredentialsIssuedCounter++;
     }
+    allCredentialsIssuedCounter++;
     latestCredentialsIssuedCounter++;
 
     // attach credential status
@@ -316,6 +332,7 @@ export abstract class BaseCredentialStatusManager {
         credentialStatus
       },
       newStatusCredential,
+      statusCredentialSiteOrigin,
       latestStatusCredentialId,
       latestCredentialsIssuedCounter,
       allCredentialsIssuedCounter
@@ -376,7 +393,7 @@ export abstract class BaseCredentialStatusManager {
           });
         }
 
-        // create and persist status data
+        // create and persist status credential
         await this.createStatusCredential({
           id: latestStatusCredentialId,
           credential: statusCredential
@@ -421,7 +438,7 @@ export abstract class BaseCredentialStatusManager {
         eventId
       }, options);
 
-      // persist updates to config data
+      // persist updates to config
       await this.updateConfig({
         latestStatusCredentialId,
         ...embedCredentialStatusResultRest
@@ -447,7 +464,7 @@ export abstract class BaseCredentialStatusManager {
         });
       }
 
-      // retrieve relevant event data
+      // retrieve relevant event
       const {
         credentialSubject,
         statusCredentialId,
@@ -619,6 +636,7 @@ export abstract class BaseCredentialStatusManager {
     const statusCredentialId = generateStatusCredentialId();
     const config: ConfigRecord = {
       id: uuid(),
+      statusCredentialSiteOrigin: this.statusCredentialSiteOrigin,
       latestStatusCredentialId: statusCredentialId,
       latestCredentialsIssuedCounter: 0,
       allCredentialsIssuedCounter: 0
@@ -642,7 +660,7 @@ export abstract class BaseCredentialStatusManager {
       });
     }
 
-    // create and persist status data
+    // create and persist status credential
     await this.createStatusCredential({
       id: statusCredentialId,
       credential: statusCredential
@@ -716,56 +734,109 @@ export abstract class BaseCredentialStatusManager {
     return true;
   }
 
-  // checks if database tables are properly configured
-  async databaseTablesProperlyConfigured(options?: DatabaseConnectionOptions): Promise<boolean> {
+  // retrieves database state
+  async getDatabaseState(options?: DatabaseConnectionOptions): Promise<GetDatabaseStateResult> {
     try {
-      // retrieve config data
+      // retrieve config
       const {
+        statusCredentialSiteOrigin,
         latestStatusCredentialId,
         latestCredentialsIssuedCounter
       } = await this.getConfigRecord(options);
+
+      // ensure that the status credential site origins match
+      if (this.statusCredentialSiteOrigin !== statusCredentialSiteOrigin) {
+        return {
+          valid: false,
+          error: new InvalidDatabaseStateError({
+            message: 'There is a mismatch between the site origin ' +
+              'that you instantiated this credential status manager with ' +
+              `(${statusCredentialSiteOrigin}) ` +
+              'and the site origin that you are trying to use now ' +
+              `(${this.statusCredentialSiteOrigin}).`
+          })
+        };
+      }
+
       const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
       const statusCredentials = await this.getAllStatusCredentials(options);
 
-      // ensure status data is consistent
+      // ensure that status is consistent
       let hasLatestStatusCredentialId = false;
-      for (const credential of statusCredentials) {
-        // report error for compact JWT credentials
-        if (typeof credential === 'string') {
-          return false;
+      const invalidStatusCredentialIds = [];
+      for (const statusCredential of statusCredentials) {
+        // ensure that status credential has valid type
+        if (typeof statusCredential === 'string') {
+          return {
+            valid: false,
+            error: new InvalidDatabaseStateError({
+              message: 'This library does not support compact JWT ' +
+                `status credentials: ${statusCredential}`
+            })
+          };
         }
 
-        // ensure status credential is well formed
-        hasLatestStatusCredentialId = hasLatestStatusCredentialId || (credential.id?.endsWith(latestStatusCredentialId) ?? false);
-        const hasProperStatusCredentialType = credential.type.includes('StatusList2021Credential');
-        const hasProperStatusCredentialSubId = credential.credentialSubject.id?.startsWith(statusCredentialUrl) ?? false;
-        const hasProperStatusCredentialSubType = credential.credentialSubject.type === 'StatusList2021';
-        const hasProperStatusCredentialSubStatusPurpose = credential.credentialSubject.statusPurpose === 'revocation';
-        const hasProperStatusFormat = hasProperStatusCredentialType &&
-                                      hasProperStatusCredentialSubId &&
-                                      hasProperStatusCredentialSubType &&
-                                      hasProperStatusCredentialSubStatusPurpose;
-        if (!hasProperStatusFormat) {
-          return false;
+        // ensure that status credential is well formed
+        hasLatestStatusCredentialId = hasLatestStatusCredentialId || (statusCredential.id?.endsWith(latestStatusCredentialId) ?? false);
+        const hasValidStatusCredentialType = statusCredential.type.includes('StatusList2021Credential');
+        const hasValidStatusCredentialSubId = statusCredential.credentialSubject.id?.startsWith(statusCredentialUrl) ?? false;
+        const hasValidStatusCredentialSubType = statusCredential.credentialSubject.type === 'StatusList2021';
+        const hasValidStatusCredentialSubStatusPurpose = statusCredential.credentialSubject.statusPurpose === 'revocation';
+        const hasValidStatusCredentialFormat = hasValidStatusCredentialType &&
+                                               hasValidStatusCredentialSubId &&
+                                               hasValidStatusCredentialSubType &&
+                                               hasValidStatusCredentialSubStatusPurpose;
+        if (!hasValidStatusCredentialFormat) {
+          invalidStatusCredentialIds.push(statusCredential.id);
         }
+      }
+      if (invalidStatusCredentialIds.length !== 0) {
+        return {
+          valid: false,
+          error: new InvalidDatabaseStateError({
+            message: 'Status credentials with the following IDs ' +
+              'have an invalid format: ' +
+              `${invalidStatusCredentialIds.map(id => `"${id as string}"`).join(', ')}`
+          })
+        };
       }
 
       // ensure that latest status credential is being tracked in the config
       if (!hasLatestStatusCredentialId) {
-        return false;
+        return {
+          valid: false,
+          error: new InvalidDatabaseStateError({
+            message: `Latest status credential ("${latestStatusCredentialId}") ` +
+              'is not being tracked in config.'
+          })
+        };
       }
 
       // retrieve credential IDs from event log
       const credentialIds = await this.getAllCredentialIds(options);
-      const hasProperEvents = credentialIds.length ===
-                              (statusCredentials.length - 1) *
-                              CREDENTIAL_STATUS_LIST_SIZE +
-                              latestCredentialsIssuedCounter;
+      const credentialIdsCounter = credentialIds.length;
+      const credentialsIssuedCounter = (statusCredentials.length - 1) *
+                                       CREDENTIAL_STATUS_LIST_SIZE +
+                                       latestCredentialsIssuedCounter;
+      const hasValidEvents = credentialIdsCounter === credentialsIssuedCounter;
+
+      if (!hasValidEvents) {
+        return {
+          valid: false,
+          error: new InvalidDatabaseStateError({
+            message: 'There is a mismatch between the credentials tracked ' +
+              'in the config and the credentials tracked in the event log.'
+          })
+        };
+      }
 
       // ensure that all checks pass
-      return hasProperEvents;
-    } catch (error) {
-      return false;
+      return { valid: true };
+    } catch (error: any) {
+      return {
+        valid: false,
+        error: new InvalidDatabaseStateError({ message: error.message })
+      };
     }
   }
 
@@ -825,6 +896,9 @@ export abstract class BaseCredentialStatusManager {
       const { id } = statusCredentialRecord;
       await this.updateRecord(this.statusCredentialTableName, 'id', id, statusCredentialRecord, options);
     } catch (error: any) {
+      if (error instanceof WriteConflictError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to update status credential: ${error.message}`
       });
@@ -837,6 +911,9 @@ export abstract class BaseCredentialStatusManager {
       const { id } = config;
       await this.updateRecord(this.configTableName, 'id', id, config, options);
     } catch (error: any) {
+      if (error instanceof WriteConflictError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to update config: ${error.message}`
       });
@@ -849,6 +926,9 @@ export abstract class BaseCredentialStatusManager {
       const { credentialId } = credentialEvent;
       await this.updateRecord(this.credentialEventTableName, 'credentialId', credentialId, credentialEvent, options);
     } catch (error: any) {
+      if (error instanceof WriteConflictError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to update event for credential: ${error.message}`
       });
@@ -909,8 +989,14 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves status credential by ID
-  async getStatusCredential(statusCredentialId: string, options?: DatabaseConnectionOptions): Promise<VerifiableCredential> {
-    const { credential } = await this.getStatusCredentialRecordById(statusCredentialId, options);
+  async getStatusCredential(statusCredentialId?: string, options?: DatabaseConnectionOptions): Promise<VerifiableCredential> {
+    let statusCredentialFinal;
+    if (statusCredentialId) {
+      statusCredentialFinal = statusCredentialId;
+    } else {
+      ({ latestStatusCredentialId: statusCredentialFinal } = await this.getConfigRecord(options));
+    }
+    const { credential } = await this.getStatusCredentialRecordById(statusCredentialFinal, options);
     return credential as VerifiableCredential;
   }
 
