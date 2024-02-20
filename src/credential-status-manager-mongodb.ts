@@ -14,7 +14,7 @@ import {
   DatabaseConnectionOptions,
   DatabaseService
 } from './credential-status-manager-base.js';
-import { BadRequestError } from './errors.js';
+import { BadRequestError, CustomError, WriteConflictError } from './errors.js';
 
 // Type definition for MongoDB connection
 interface MongoDbConnection {
@@ -130,25 +130,29 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
 
   // executes function as transaction
   async executeTransaction(func: (options?: MongoDbConnectionOptions) => Promise<any>): Promise<any> {
-    let success = false;
-    while (!success) {
+    let done = false;
+    while (!done) {
       const { client } = await this.connectDatabase();
       const session = client.startSession();
       const transactionOptions: TransactionOptions = {
         readPreference: ReadPreference.primary,
-        readConcern: { level: ReadConcernLevel.majority },
+        readConcern: { level: ReadConcernLevel.local },
         writeConcern: { w: 'majority' },
         maxTimeMS: 30000
       };
       try {
         const finalResult = await session.withTransaction(async () => {
           const funcResult = await func({ client, session });
-          success = true;
+          done = true;
           return funcResult;
         }, transactionOptions);
-        success = true;
+        done = true;
         return finalResult;
       } catch (error) {
+        if (!(error instanceof WriteConflictError)) {
+          done = true;
+          throw error;
+        }
         const delay = Math.floor(Math.random() * 1000);
         await new Promise(resolve => setTimeout(resolve, delay));
       } finally {
@@ -284,6 +288,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const table = database.collection(tableName);
       const query = { [recordIdKey]: recordIdValue };
       await table.findOneAndReplace(query, record as Document, { session });
+    } catch (error: any) {
+      if (error.codeName === 'WriteConflict') {
+        throw new WriteConflictError({
+          message: error.message
+        });
+      }
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction

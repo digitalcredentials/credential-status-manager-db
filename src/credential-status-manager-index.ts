@@ -14,7 +14,7 @@ import {
   BadRequestError,
   InternalServerError,
   InvalidCredentialsError,
-  InvalidStateError,
+  InvalidDatabaseStateError,
   MissingDatabaseError,
   MissingDatabaseTableError
 } from './errors.js';
@@ -105,10 +105,10 @@ export async function createStatusManager(options: CredentialStatusManagerOption
         await statusManager.initializeDatabaseResources(options);
       }
 
-      // database should be properly configured by this point
-      const tablesProperlyConfigured = await statusManager.databaseTablesProperlyConfigured(options);
-      if (!tablesProperlyConfigured) {
-        throw new InvalidStateError({ statusManager });
+      // database should have valid configuration by this point
+      const databaseState = await statusManager.getDatabaseState(options);
+      if (!databaseState.valid) {
+        throw databaseState.error as InvalidDatabaseStateError;
       }
     } else {
       // database should already exist if autoDeployDatabase is not configured
@@ -124,11 +124,11 @@ export async function createStatusManager(options: CredentialStatusManagerOption
 
       const tablesEmpty = await statusManager.databaseTablesEmpty(options);
       if (!tablesEmpty) {
-        // database tables should be properly configured if
+        // database tables should have valid configuration if
         // they are not empty and autoDeployDatabase is not configured
-        const tablesProperlyConfigured = await statusManager.databaseTablesProperlyConfigured(options);
-        if (!tablesProperlyConfigured) {
-          throw new InvalidStateError({ statusManager });
+        const databaseState = await statusManager.getDatabaseState(options);
+        if (!databaseState.valid) {
+          throw databaseState.error as InvalidDatabaseStateError;
         }
       } else {
         // database tables should be initialized if
