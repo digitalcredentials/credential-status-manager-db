@@ -21,6 +21,8 @@ import {
   signCredential
 } from './helpers.js';
 
+/* eslint-disable @typescript-eslint/restrict-template-expressions */
+
 // Number of credentials tracked in a list
 const CREDENTIAL_STATUS_LIST_SIZE = 100000;
 
@@ -82,15 +84,16 @@ interface ComposeStatusCredentialOptions {
   statusPurpose?: string;
 }
 
-// Type definition for embedCredentialStatus method input
-interface EmbedCredentialStatusOptions {
+// Type definition for attachCredentialStatus method input
+interface AttachCredentialStatusOptions {
   credential: any;
   statusPurpose?: string;
 }
 
-// Type definition for embedCredentialStatus method output
-type EmbedCredentialStatusResult = ConfigRecord & {
+// Type definition for attachCredentialStatus method output
+type AttachCredentialStatusResult = ConfigRecord & {
   credential: any;
+  newUserCredential: boolean;
   newStatusCredential: boolean;
 };
 
@@ -247,8 +250,15 @@ export abstract class BaseCredentialStatusManager {
     ];
   }
 
-  // embeds status into credential
-  async embedCredentialStatus({ credential, statusPurpose = 'revocation' }: EmbedCredentialStatusOptions, options?: DatabaseConnectionOptions): Promise<EmbedCredentialStatusResult> {
+  // generates new status credential ID
+  // Note: We assume this method will never generate an ID that
+  // has never been generated for a status credential in this system
+  generateStatusCredentialId(): string {
+    return Math.random().toString(36).substring(2, 12).toUpperCase();
+  }
+
+  // attaches status to credential
+  async attachCredentialStatus({ credential, statusPurpose = 'revocation' }: AttachCredentialStatusOptions, options?: DatabaseConnectionOptions): Promise<AttachCredentialStatusResult> {
     // ensure that credential has ID
     if (!credential.id) {
       // Note: This assumes that uuid will never generate an ID that
@@ -295,6 +305,7 @@ export abstract class BaseCredentialStatusManager {
           ...credential,
           credentialStatus
         },
+        newUserCredential: false,
         newStatusCredential: false,
         statusCredentialSiteOrigin,
         latestStatusCredentialId,
@@ -308,7 +319,7 @@ export abstract class BaseCredentialStatusManager {
     if (latestCredentialsIssuedCounter >= CREDENTIAL_STATUS_LIST_SIZE) {
       newStatusCredential = true;
       latestCredentialsIssuedCounter = 0;
-      latestStatusCredentialId = generateStatusCredentialId();
+      latestStatusCredentialId = this.generateStatusCredentialId();
     }
     allCredentialsIssuedCounter++;
     latestCredentialsIssuedCounter++;
@@ -331,6 +342,7 @@ export abstract class BaseCredentialStatusManager {
         ...credential,
         credentialStatus
       },
+      newUserCredential: true,
       newStatusCredential,
       statusCredentialSiteOrigin,
       latestStatusCredentialId,
@@ -352,10 +364,11 @@ export abstract class BaseCredentialStatusManager {
       // attach status to credential
       let {
         credential: credentialWithStatus,
+        newUserCredential,
         newStatusCredential,
         latestStatusCredentialId,
-        ...embedCredentialStatusResultRest
-      } = await this.embedCredentialStatus({ credential }, options);
+        ...attachCredentialStatusResultRest
+      } = await this.attachCredentialStatus({ credential }, options);
 
       // retrieve signing material
       const {
@@ -373,6 +386,22 @@ export abstract class BaseCredentialStatusManager {
         didSeed,
         didWebUrl
       });
+
+      // sign credential if necessary
+      if (signUserCredential) {
+        credentialWithStatus = await signCredential({
+          credential: credentialWithStatus,
+          didMethod,
+          didSeed,
+          didWebUrl
+        });
+      }
+
+      // return credential without updating database resources
+      // if we are already accounting for this credential
+      if (!newUserCredential) {
+        return credentialWithStatus;
+      }
 
       // create new status credential only if the last one has reached capacity
       if (newStatusCredential) {
@@ -398,16 +427,6 @@ export abstract class BaseCredentialStatusManager {
           id: latestStatusCredentialId,
           credential: statusCredential
         }, options);
-      }
-
-      // sign credential if necessary
-      if (signUserCredential) {
-        credentialWithStatus = await signCredential({
-          credential: credentialWithStatus,
-          didMethod,
-          didSeed,
-          didWebUrl
-        });
       }
 
       // extract relevant data from credential status
@@ -441,7 +460,7 @@ export abstract class BaseCredentialStatusManager {
       // persist updates to config
       await this.updateConfig({
         latestStatusCredentialId,
-        ...embedCredentialStatusResultRest
+        ...attachCredentialStatusResultRest
       }, options);
 
       return credentialWithStatus;
@@ -578,7 +597,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves database URL
-  abstract getDatabaseUrl(): Promise<string>;
+  abstract getDatabaseUrl(options?: DatabaseConnectionOptions): Promise<string>;
 
   // executes function as transaction
   abstract executeTransaction(func: (options?: DatabaseConnectionOptions) => Promise<any>): Promise<any>;
@@ -633,7 +652,7 @@ export abstract class BaseCredentialStatusManager {
     });
 
     // create and persist status config
-    const statusCredentialId = generateStatusCredentialId();
+    const statusCredentialId = this.generateStatusCredentialId();
     const config: ConfigRecord = {
       id: uuid(),
       statusCredentialSiteOrigin: this.statusCredentialSiteOrigin,
@@ -741,7 +760,8 @@ export abstract class BaseCredentialStatusManager {
       const {
         statusCredentialSiteOrigin,
         latestStatusCredentialId,
-        latestCredentialsIssuedCounter
+        latestCredentialsIssuedCounter,
+        allCredentialsIssuedCounter
       } = await this.getConfigRecord(options);
 
       // ensure that the status credential site origins match
@@ -818,14 +838,29 @@ export abstract class BaseCredentialStatusManager {
       const credentialsIssuedCounter = (statusCredentials.length - 1) *
                                        CREDENTIAL_STATUS_LIST_SIZE +
                                        latestCredentialsIssuedCounter;
-      const hasValidEvents = credentialIdsCounter === credentialsIssuedCounter;
+      const hasValidEventsLogToConfig = credentialIdsCounter === allCredentialsIssuedCounter;
+      const hasValidEventsConfigToReality = allCredentialsIssuedCounter === credentialsIssuedCounter;
 
-      if (!hasValidEvents) {
+      if (!hasValidEventsLogToConfig) {
         return {
           valid: false,
           error: new InvalidDatabaseStateError({
             message: 'There is a mismatch between the credentials tracked ' +
-              'in the config and the credentials tracked in the event log.'
+              `in the event log (${credentialIdsCounter}) ` +
+              'and the credentials tracked ' +
+              `in the config (${allCredentialsIssuedCounter}).`
+          })
+        };
+      }
+
+      if (!hasValidEventsConfigToReality) {
+        return {
+          valid: false,
+          error: new InvalidDatabaseStateError({
+            message: 'There is a mismatch between the credentials tracked ' +
+              `in the config (${allCredentialsIssuedCounter}) ` +
+              'and the credentials tracked ' +
+              `in reality (${credentialsIssuedCounter}).`
           })
         };
       }
@@ -997,7 +1032,7 @@ export abstract class BaseCredentialStatusManager {
       ({ latestStatusCredentialId: statusCredentialFinal } = await this.getConfigRecord(options));
     }
     const { credential } = await this.getStatusCredentialRecordById(statusCredentialFinal, options);
-    return credential as VerifiableCredential;
+    return credential;
   }
 
   // retrieves config by ID
@@ -1112,11 +1147,4 @@ export async function composeStatusCredential({
   };
 
   return credential;
-}
-
-// generates new status credential ID
-// Note: We assume this function will never generate an ID that
-// has never been generated for a status credential in this system
-function generateStatusCredentialId(): string {
-  return Math.random().toString(36).substring(2, 12).toUpperCase();
 }

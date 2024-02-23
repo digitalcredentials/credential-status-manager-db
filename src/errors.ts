@@ -1,5 +1,7 @@
 import { BaseCredentialStatusManager } from './credential-status-manager-base.js';
 
+/* eslint-disable @typescript-eslint/restrict-template-expressions */
+
 interface CustomErrorOptionalOptions {
   statusManager?: BaseCredentialStatusManager;
   message?: string;

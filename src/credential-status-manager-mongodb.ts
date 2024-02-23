@@ -14,7 +14,9 @@ import {
   DatabaseConnectionOptions,
   DatabaseService
 } from './credential-status-manager-base.js';
-import { BadRequestError, CustomError, WriteConflictError } from './errors.js';
+import { BadRequestError, WriteConflictError } from './errors.js';
+
+/* eslint-disable @typescript-eslint/restrict-template-expressions */
 
 // Type definition for MongoDB connection
 interface MongoDbConnection {
@@ -24,7 +26,7 @@ interface MongoDbConnection {
 
 // Type definition for the input of the function passed to
 // MongoDB's implementation of executeTransaction
-type MongoDbConnectionOptions = DatabaseConnectionOptions & {
+export type MongoDbConnectionOptions = DatabaseConnectionOptions & {
   client?: MongoClient;
   session?: ClientSession;
 };
@@ -99,7 +101,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   }
 
   // retrieve database client
-  async getDatabaseClient(options?: MongoDbConnectionOptions) {
+  async getDatabaseClient(options?: MongoDbConnectionOptions): Promise<MongoClient> {
     // get database URL
     const databaseUrl = await this.getDatabaseUrl(options);
     // create fresh MongoDB client
@@ -124,7 +126,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   // disconnects from database
   async disconnectDatabase(client?: MongoClient): Promise<void> {
     if (client) {
-      client.close();
+      await client.close();
     }
   }
 
@@ -268,6 +270,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
       await table.insertOne(record as Document, { session });
+    } catch (error: any) {
+      if (error.codeName === 'WriteConflict') {
+        throw new WriteConflictError({
+          message: error.message
+        });
+      }
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
