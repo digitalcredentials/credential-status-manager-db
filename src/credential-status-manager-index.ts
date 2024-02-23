@@ -19,6 +19,8 @@ import {
   MissingDatabaseTableError
 } from './errors.js';
 
+/* eslint-disable @typescript-eslint/restrict-template-expressions */
+
 // Type definition for base options of createStatusManager function input
 interface CredentialStatusManagerBaseOptions {
   databaseService: DatabaseService;
@@ -33,13 +35,13 @@ type CredentialStatusManagerOptions = CredentialStatusManagerBaseOptions &
 export async function createStatusManager(options: CredentialStatusManagerOptions)
 : Promise<BaseCredentialStatusManager> {
   const {
-    statusCredentialSiteOrigin,
     databaseService,
     databaseUrl,
     databaseHost,
     databasePort,
     databaseUsername,
     databasePassword,
+    statusCredentialSiteOrigin,
     autoDeployDatabase=true
   } = options;
   let statusManager: BaseCredentialStatusManager;
