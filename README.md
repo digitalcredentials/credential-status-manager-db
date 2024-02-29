@@ -68,10 +68,10 @@ The `createStatusManager` function is the only exported pure function of this li
 | `databaseUsername` | username of user with read/write privileges on the database instance used to manage credential status data | string | yes (if `databaseUrl` is not set) |
 | `databasePassword` | password associated with `databaseUsername` | string | yes (if `databaseUrl` is not set) |
 | `databaseName` | name of the database instance used to manage credential status data | string | no (default: `credentialStatus`) |
-| `statusCredentialTableName` | name of the database table used to manage status credentials | string | no (default: `StatusCredential`; [schema](#statuscredential)) |
-| `configTableName` | name of the database table used to manage application configuration | string | no (default: `Config`; [schema](#config)) |
-| `eventTableName` | name of the database table used to manage credential status events | string | no (default: `Event`; [schema](#event)) |
-| `credentialEventTableName` | name of the database table used to manage the latest status event for a given credential | string | no (default: `CredentialEvent`; [schema](#credentialevent)) |
+| `statusCredentialTableName` | name of the database table used to manage status credentials ([schema](#statuscredential)) | string | no (default: `StatusCredential`) |
+| `configTableName` | name of the database table used to manage application configuration ([schema](#config)) | string | no (default: `Config`) |
+| `eventTableName` | name of the database table used to manage credential status events ([schema](#event)) | string | no (default: `Event`) |
+| `credentialEventTableName` | name of the database table used to manage the latest status event for a given credential ([schema](#credentialevent)) | string | no (default: `CredentialEvent`) |
 | `autoDeployDatabase` | whether or not to automatically create the database (`databaseName`) and the initial tables (`statusCredentialTableName` and `configTableName`) | string | no (default: `true`) |
 | `didMethod` | name of the DID method used for signing | `key` \| `web` | yes |
 | `didSeed` | seed used to deterministically generate DID | string | yes |
