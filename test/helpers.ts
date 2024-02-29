@@ -7,9 +7,9 @@ import {
 } from '../src/credential-status-manager-base.js';
 import { DidMethod } from '../src/helpers.js';
 
-const credentialId1 = 'https://university-xyz.edu/credentials/3732';
-const credentialId2 = 'https://university-xyz.edu/credentials/6274';
-const credentialId3 = 'https://university-xyz.edu/credentials/0285';
+const credentialId1 = 'https://credentials.example.edu/3732';
+const credentialId2 = 'https://credentials.example.edu/6274';
+const credentialId3 = 'https://credentials.example.edu/0285';
 const credentialSubject = 'did:example:abcdef';
 const issuerKey = 'z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC';
 const issuerDid = `did:key:${issuerKey}`;

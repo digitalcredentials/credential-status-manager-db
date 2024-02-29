@@ -42,7 +42,7 @@ export async function createStatusManager(options: CredentialStatusManagerOption
     databaseUsername,
     databasePassword,
     statusCredentialSiteOrigin,
-    autoDeployDatabase=true
+    autoDeployDatabase = true
   } = options;
   let statusManager: BaseCredentialStatusManager;
 
