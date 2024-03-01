@@ -60,11 +60,11 @@ The `createStatusManager` function is the only exported pure function of this li
 
 | Key | Description | Type | Required |
 | --- | --- | --- | --- |
-| `databaseService` | name of the database service that will host the credential status resources | `mongodb` | yes |
+| `databaseService` | name of the database service used to manage credential status data | `mongodb` | yes |
 | `statusCredentialSiteOrigin` | base URL of status credentials managed by a given deployment | string | yes |
 | `databaseUrl` | URL of the database instance used to manage credential status data | string | yes (if `databaseHost`, `databasePort`, `databaseUsername`, and `databasePassword` are not set) |
 | `databaseHost` | host of the database instance used to manage credential status data | string | yes (if `databaseUrl` is not set) |
-| `databasePort` | port of the database instance used to manage credential status data | string | yes (if `databaseUrl` is not set) |
+| `databasePort` | port of the database instance used to manage credential status data | number | yes (if `databaseUrl` is not set) |
 | `databaseUsername` | username of user with read/write privileges on the database instance used to manage credential status data | string | yes (if `databaseUrl` is not set) |
 | `databasePassword` | password associated with `databaseUsername` | string | yes (if `databaseUrl` is not set) |
 | `databaseName` | name of the database instance used to manage credential status data | string | no (default: `credentialStatus`) |

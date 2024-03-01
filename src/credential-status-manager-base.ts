@@ -113,7 +113,7 @@ interface GetDatabaseStateResult {
 export interface DatabaseConnectionOptions {
   databaseUrl?: string;
   databaseHost?: string;
-  databasePort?: string;
+  databasePort?: number;
   databaseUsername?: string;
   databasePassword?: any;
   [x: string]: any;
@@ -129,7 +129,7 @@ export interface BaseCredentialStatusManagerOptions {
   databaseName?: string;
   databaseUrl?: string;
   databaseHost?: string;
-  databasePort?: string;
+  databasePort?: number;
   databaseUsername: string;
   databasePassword: string;
   didMethod: DidMethod;
@@ -156,7 +156,7 @@ export abstract class BaseCredentialStatusManager {
   protected readonly databaseName: string;
   protected readonly databaseUrl?: string;
   protected readonly databaseHost?: string;
-  protected readonly databasePort?: string;
+  protected readonly databasePort?: number;
   protected readonly databaseUsername: string;
   protected readonly databasePassword: string;
   protected readonly didMethod: DidMethod;
