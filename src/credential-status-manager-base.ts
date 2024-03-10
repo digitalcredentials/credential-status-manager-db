@@ -1,9 +1,8 @@
 /*!
- * Copyright (c) 2023 Digital Credentials Consortium. All rights reserved.
+ * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
-import { CONTEXT_URL_V1 } from '@digitalbazaar/vc-status-list-context';
+import { createCredential, createList, decodeList } from '@digitalcredentials/vc-bitstring-status-list';
 import { VerifiableCredential } from '@digitalcredentials/vc-data-model';
-import { createCredential, createList, decodeList } from '@digitalcredentials/vc-status-list';
 import { v4 as uuid } from 'uuid';
 import {
   BadRequestError,
@@ -16,9 +15,11 @@ import {
 import {
   DidMethod,
   deriveStatusCredentialId,
+  getCredentialSubjectObject,
   getDateString,
   getSigningMaterial,
-  signCredential
+  signCredential,
+  validateCredential
 } from './helpers.js';
 
 /* eslint-disable @typescript-eslint/restrict-template-expressions */
@@ -26,8 +27,14 @@ import {
 // Number of credentials tracked in a list
 const CREDENTIAL_STATUS_LIST_SIZE = 100000;
 
+// Status credential type
+const STATUS_CREDENTIAL_TYPE = 'BitstringStatusListCredential';
+
+// Status credential subject type
+const STATUS_CREDENTIAL_SUBJECT_TYPE = 'BitstringStatusList';
+
 // Credential status type
-const CREDENTIAL_STATUS_TYPE = 'StatusList2021Entry';
+const CREDENTIAL_STATUS_TYPE = 'BitstringStatusListEntry';
 
 // Database hosting service
 export enum DatabaseService {
@@ -35,10 +42,17 @@ export enum DatabaseService {
   // MySQL = 'mysql' // TODO - implement this
 }
 
+// Purposes status of a status credential
+export enum StatusPurpose {
+  Revocation = 'revocation',
+  Suspension = 'suspension'
+}
+
 // States of credential resulting from caller actions and tracked in the event log
 export enum CredentialState {
   Active = 'active',
-  Revoked = 'revoked'
+  Revoked = 'revoked',
+  Suspended = 'suspended'
 }
 
 // Type definition for event
@@ -81,13 +95,13 @@ interface ComposeStatusCredentialOptions {
   issuerDid: string;
   credentialId: string;
   statusList?: any;
-  statusPurpose?: string;
+  statusPurpose?: StatusPurpose;
 }
 
 // Type definition for attachCredentialStatus method input
 interface AttachCredentialStatusOptions {
   credential: any;
-  statusPurpose?: string;
+  statusPurpose?: StatusPurpose;
 }
 
 // Type definition for attachCredentialStatus method output
@@ -97,10 +111,16 @@ type AttachCredentialStatusResult = ConfigRecord & {
   newStatusCredential: boolean;
 };
 
+// Type definition for allocateStatus method input
+interface AllocateStatusOptions {
+  credential: VerifiableCredential;
+  statusPurpose?: StatusPurpose;
+}
+
 // Type definition for updateStatus method input
 interface UpdateStatusOptions {
   credentialId: string;
-  credentialStatus: CredentialState;
+  credentialState?: CredentialState;
 }
 
 // Type definition for getDatabaseState method output
@@ -252,24 +272,34 @@ export abstract class BaseCredentialStatusManager {
 
   // generates new status credential ID
   // Note: We assume this method will never generate an ID that
-  // has never been generated for a status credential in this system
+  // has previously been generated for a status credential in this system
   generateStatusCredentialId(): string {
     return Math.random().toString(36).substring(2, 12).toUpperCase();
   }
 
+  // generates new user credential ID
+  // Note: We assume this method will never generate an ID that
+  // has previously been generated for a user credential in this system
+  generateUserCredentialId(): string {
+    return `urn:uuid:${uuid()}`;
+  }
+
   // attaches status to credential
-  async attachCredentialStatus({ credential, statusPurpose = 'revocation' }: AttachCredentialStatusOptions, options?: DatabaseConnectionOptions): Promise<AttachCredentialStatusResult> {
+  async attachCredentialStatus({ credential, statusPurpose = StatusPurpose.Revocation }: AttachCredentialStatusOptions, options?: DatabaseConnectionOptions): Promise<AttachCredentialStatusResult> {
+    // copy credential and delete appropriate fields
+    const credentialCopy = Object.assign({}, credential);
+    delete credentialCopy.credentialStatus;
+    delete credentialCopy.proof;
+
     // ensure that credential has ID
-    if (!credential.id) {
+    if (!credentialCopy.id) {
       // Note: This assumes that uuid will never generate an ID that
       // conflicts with an ID that has already been tracked in the event log
-      credential.id = uuid();
+      credentialCopy.id = this.generateUserCredentialId();
     }
 
-    // ensure that credential contains valid status credential context
-    if (!credential['@context'].includes(CONTEXT_URL_V1)) {
-      credential['@context'].push(CONTEXT_URL_V1);
-    }
+    // validate credential before attaching status
+    validateCredential(credentialCopy);
 
     // retrieve config
     let {
@@ -281,7 +311,7 @@ export abstract class BaseCredentialStatusManager {
     } = await this.getConfigRecord(options);
 
     // retrieve latest relevant event for credential with given ID
-    const event = await this.getLatestEventRecordForCredential(credential.id, options);
+    const event = await this.getLatestEventRecordForCredential(credentialCopy.id, options);
 
     // do not allocate new entry if ID is already being tracked
     if (event) {
@@ -302,7 +332,7 @@ export abstract class BaseCredentialStatusManager {
       return {
         id,
         credential: {
-          ...credential,
+          ...credentialCopy,
           credentialStatus
         },
         newUserCredential: false,
@@ -339,7 +369,7 @@ export abstract class BaseCredentialStatusManager {
     return {
       id,
       credential: {
-        ...credential,
+        ...credentialCopy,
         credentialStatus
       },
       newUserCredential: true,
@@ -351,8 +381,8 @@ export abstract class BaseCredentialStatusManager {
     };
   }
 
-  // allocates status for credential in race-prone manner
-  async allocateStatus(credential: VerifiableCredential): Promise<VerifiableCredential> {
+  // allocates status for credential
+  async allocateStatus({ credential, statusPurpose = StatusPurpose.Revocation }: AllocateStatusOptions): Promise<VerifiableCredential> {
     return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // report error for compact JWT credentials
       if (typeof credential === 'string') {
@@ -368,7 +398,7 @@ export abstract class BaseCredentialStatusManager {
         newStatusCredential,
         latestStatusCredentialId,
         ...attachCredentialStatusResultRest
-      } = await this.attachCredentialStatus({ credential }, options);
+      } = await this.attachCredentialStatus({ credential, statusPurpose }, options);
 
       // retrieve signing material
       const {
@@ -422,8 +452,8 @@ export abstract class BaseCredentialStatusManager {
           });
         }
 
-        // create and persist status credential
-        await this.createStatusCredential({
+        // create and persist status credential record
+        await this.createStatusCredentialRecord({
           id: latestStatusCredentialId,
           credential: statusCredential
         }, options);
@@ -438,27 +468,28 @@ export abstract class BaseCredentialStatusManager {
       // retrieve status credential ID from status credential URL
       const statusCredentialId = deriveStatusCredentialId(statusCredentialUrl);
 
-      // create new event
+      // create new event record
+      const credentialSubjectObject = getCredentialSubjectObject(credentialWithStatus);
       const eventId = uuid();
       const event: EventRecord = {
         id: eventId,
         timestamp: getDateString(),
-        credentialId: credential.id as string,
+        credentialId: credentialWithStatus.id as string,
         credentialIssuer: issuerDid,
-        credentialSubject: credential.credentialSubject?.id,
+        credentialSubject: credentialSubjectObject?.id,
         credentialState: CredentialState.Active,
         verificationMethod,
         statusCredentialId,
         credentialStatusIndex: parseInt(statusListIndex)
       };
-      await this.createEvent(event, options);
-      await this.createCredentialEvent({
-        credentialId: credential.id as string,
+      await this.createEventRecord(event, options);
+      await this.createCredentialEventRecord({
+        credentialId: credentialWithStatus.id as string,
         eventId
       }, options);
 
-      // persist updates to config
-      await this.updateConfig({
+      // persist updates to config record
+      await this.updateConfigRecord({
         latestStatusCredentialId,
         ...attachCredentialStatusResultRest
       }, options);
@@ -467,10 +498,20 @@ export abstract class BaseCredentialStatusManager {
     });
   }
 
-  // updates status of credential in race-prone manner
+  // allocates revocation status for credential
+  async allocateRevocationStatus(credential: VerifiableCredential): Promise<VerifiableCredential> {
+    return this.allocateStatus({ credential, statusPurpose: StatusPurpose.Revocation });
+  }
+
+  // allocates suspension status for credential
+  async allocateSuspensionStatus(credential: VerifiableCredential): Promise<VerifiableCredential> {
+    return this.allocateStatus({ credential, statusPurpose: StatusPurpose.Suspension });
+  }
+
+  // updates status of credential
   async updateStatus({
     credentialId,
-    credentialStatus
+    credentialState = CredentialState.Revoked
   }: UpdateStatusOptions): Promise<VerifiableCredential> {
     return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // retrieve latest relevant event for credential with given ID
@@ -517,11 +558,12 @@ export abstract class BaseCredentialStatusManager {
       }
 
       // update status credential
-      const statusCredentialListEncodedBefore = statusCredentialBefore.credentialSubject.encodedList;
+      const statusCredentialSubjectObjectBefore = getCredentialSubjectObject(statusCredentialBefore);
+      const statusCredentialListEncodedBefore = statusCredentialSubjectObjectBefore.encodedList;
       const statusCredentialListDecoded = await decodeList({
         encodedList: statusCredentialListEncodedBefore
       });
-      switch (credentialStatus) {
+      switch (credentialState) {
         case CredentialState.Active:
           statusCredentialListDecoded.setStatus(credentialStatusIndex, false); // active credential is represented as 0 bit
           break;
@@ -531,7 +573,7 @@ export abstract class BaseCredentialStatusManager {
         default:
           throw new BadRequestError({
             message:
-              '"credentialStatus" must be one of the following values: ' +
+              '"credentialState" must be one of the following values: ' +
               `${Object.values(CredentialState).map(s => `"${s}"`).join(', ')}.`
           });
       }
@@ -552,33 +594,43 @@ export abstract class BaseCredentialStatusManager {
         });
       }
 
-      // persist status credential
-      await this.updateStatusCredential({
+      // persist status credential record
+      await this.updateStatusCredentialRecord({
         id: statusCredentialId,
         credential: statusCredential
       }, options);
 
-      // create new event
+      // create new event record
       const eventId = uuid();
-      const newEvent: EventRecord = {
+      const newEventRecord: EventRecord = {
         id: eventId,
         timestamp: getDateString(),
         credentialId,
         credentialIssuer: issuerDid,
         credentialSubject,
-        credentialState: credentialStatus,
+        credentialState,
         verificationMethod,
         statusCredentialId,
         credentialStatusIndex
       };
-      await this.createEvent(newEvent, options);
-      await this.updateCredentialEvent({
+      await this.createEventRecord(newEventRecord, options);
+      await this.updateCredentialEventRecord({
         credentialId,
         eventId
       }, options);
 
       return statusCredential;
     });
+  }
+
+  // revokes credential
+  async revokeCredential(credentialId: string): Promise<VerifiableCredential> {
+    return this.updateStatus({ credentialId, credentialState: CredentialState.Revoked });
+  }
+
+  // suspends credential
+  async suspendCredential(credentialId: string): Promise<VerifiableCredential> {
+    return this.updateStatus({ credentialId, credentialState: CredentialState.Suspended });
   }
 
   // checks status of credential with given ID
@@ -651,18 +703,18 @@ export abstract class BaseCredentialStatusManager {
       didWebUrl
     });
 
-    // create and persist status config
+    // create and persist status config record
     const statusCredentialId = this.generateStatusCredentialId();
-    const config: ConfigRecord = {
+    const configRecord: ConfigRecord = {
       id: uuid(),
       statusCredentialSiteOrigin: this.statusCredentialSiteOrigin,
       latestStatusCredentialId: statusCredentialId,
       latestCredentialsIssuedCounter: 0,
       allCredentialsIssuedCounter: 0
     };
-    await this.createConfig(config, options);
+    await this.createConfigRecord(configRecord, options);
 
-    // create status credential
+    // compose status credential
     const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${statusCredentialId}`;
     let statusCredential = await composeStatusCredential({
       issuerDid,
@@ -679,8 +731,8 @@ export abstract class BaseCredentialStatusManager {
       });
     }
 
-    // create and persist status credential
-    await this.createStatusCredential({
+    // create and persist status credential record
+    await this.createStatusCredentialRecord({
       id: statusCredentialId,
       credential: statusCredential
     }, options);
@@ -797,11 +849,12 @@ export abstract class BaseCredentialStatusManager {
         }
 
         // ensure that status credential is well formed
+        const statusCredentialSubjectObject = getCredentialSubjectObject(statusCredential);
         hasLatestStatusCredentialId = hasLatestStatusCredentialId || (statusCredential.id?.endsWith(latestStatusCredentialId) ?? false);
-        const hasValidStatusCredentialType = statusCredential.type.includes('StatusList2021Credential');
-        const hasValidStatusCredentialSubId = statusCredential.credentialSubject.id?.startsWith(statusCredentialUrl) ?? false;
-        const hasValidStatusCredentialSubType = statusCredential.credentialSubject.type === 'StatusList2021';
-        const hasValidStatusCredentialSubStatusPurpose = statusCredential.credentialSubject.statusPurpose === 'revocation';
+        const hasValidStatusCredentialType = statusCredential.type.includes(STATUS_CREDENTIAL_TYPE);
+        const hasValidStatusCredentialSubId = statusCredentialSubjectObject.id?.startsWith(statusCredentialUrl) ?? false;
+        const hasValidStatusCredentialSubType = statusCredentialSubjectObject.type === STATUS_CREDENTIAL_SUBJECT_TYPE;
+        const hasValidStatusCredentialSubStatusPurpose = statusCredentialSubjectObject.statusPurpose === StatusPurpose.Revocation;
         const hasValidStatusCredentialFormat = hasValidStatusCredentialType &&
                                                hasValidStatusCredentialSubId &&
                                                hasValidStatusCredentialSubType &&
@@ -878,8 +931,8 @@ export abstract class BaseCredentialStatusManager {
   // creates single database record
   abstract createRecord<T>(tableName: string, record: T, options?: DatabaseConnectionOptions): Promise<void>;
 
-  // creates status credential
-  async createStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
+  // creates status credential record
+  async createStatusCredentialRecord(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.statusCredentialTableName, statusCredentialRecord, options);
     } catch (error: any) {
@@ -889,10 +942,10 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates config
-  async createConfig(config: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
+  // creates config record
+  async createConfigRecord(configRecord: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
-      await this.createRecord(this.configTableName, config, options);
+      await this.createRecord(this.configTableName, configRecord, options);
     } catch (error: any) {
       throw new InternalServerError({
         message: `Unable to create config: ${error.message}`
@@ -900,10 +953,10 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates event
-  async createEvent(event: EventRecord, options?: DatabaseConnectionOptions): Promise<void> {
+  // creates event record
+  async createEventRecord(eventRecord: EventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
-      await this.createRecord(this.eventTableName, event, options);
+      await this.createRecord(this.eventTableName, eventRecord, options);
     } catch (error: any) {
       throw new InternalServerError({
         message: `Unable to create event: ${error.message}`
@@ -911,10 +964,10 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates credential event
-  async createCredentialEvent(credentialEvent: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
+  // creates credential event record
+  async createCredentialEventRecord(credentialEventRecord: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
-      await this.createRecord(this.credentialEventTableName, credentialEvent, options);
+      await this.createRecord(this.credentialEventTableName, credentialEventRecord, options);
     } catch (error: any) {
       throw new InternalServerError({
         message: `Unable to create event for credential: ${error.message}`
@@ -925,8 +978,8 @@ export abstract class BaseCredentialStatusManager {
   // updates single database record
   abstract updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: DatabaseConnectionOptions): Promise<void>;
 
-  // updates status credential
-  async updateStatusCredential(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
+  // updates status credential record
+  async updateStatusCredentialRecord(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { id } = statusCredentialRecord;
       await this.updateRecord(this.statusCredentialTableName, 'id', id, statusCredentialRecord, options);
@@ -940,11 +993,11 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // updates config
-  async updateConfig(config: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
+  // updates config record
+  async updateConfigRecord(configRecord: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
-      const { id } = config;
-      await this.updateRecord(this.configTableName, 'id', id, config, options);
+      const { id } = configRecord;
+      await this.updateRecord(this.configTableName, 'id', id, configRecord, options);
     } catch (error: any) {
       if (error instanceof WriteConflictError) {
         throw error;
@@ -955,11 +1008,11 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // updates credential event
-  async updateCredentialEvent(credentialEvent: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
+  // updates credential event record
+  async updateCredentialEventRecord(credentialEventRecord: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
-      const { credentialId } = credentialEvent;
-      await this.updateRecord(this.credentialEventTableName, 'credentialId', credentialId, credentialEvent, options);
+      const { credentialId } = credentialEventRecord;
+      await this.updateRecord(this.credentialEventTableName, 'credentialId', credentialId, credentialEventRecord, options);
     } catch (error: any) {
       if (error instanceof WriteConflictError) {
         throw error;
@@ -1121,12 +1174,12 @@ export abstract class BaseCredentialStatusManager {
   }
 }
 
-// composes StatusList2021Credential
+// composes BitstringStatusListCredential
 export async function composeStatusCredential({
   issuerDid,
   credentialId,
   statusList,
-  statusPurpose = 'revocation'
+  statusPurpose = StatusPurpose.Revocation
 }: ComposeStatusCredentialOptions): Promise<VerifiableCredential> {
   // determine whether or not to create a new status credential
   if (!statusList) {
@@ -1134,7 +1187,6 @@ export async function composeStatusCredential({
   }
 
   // create status credential
-  const issuanceDate = getDateString();
   let credential = await createCredential({
     id: credentialId,
     list: statusList,
@@ -1143,7 +1195,7 @@ export async function composeStatusCredential({
   credential = {
     ...credential,
     issuer: issuerDid,
-    issuanceDate
+    validFrom: getDateString()
   };
 
   return credential;
