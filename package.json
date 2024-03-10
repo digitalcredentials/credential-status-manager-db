@@ -1,6 +1,6 @@
 {
   "name": "@digitalcredentials/credential-status-manager-db",
-  "description": "A Typescript library for managing the status of Verifiable Credentials in a Database using Status List 2021.",
+  "description": "A Typescript library for managing the status of Verifiable Credentials in a Database using Bitstring Status List.",
   "version": "0.0.1",
   "license": "MIT",
   "engines": {
@@ -8,7 +8,7 @@
   },
   "author": {
     "name": "Digital Credentials Consortium",
-    "url": "https://github.com/digitalcredentials/"
+    "url": "https://github.com/digitalcredentials"
   },
   "repository": {
     "type": "git",
@@ -59,17 +59,20 @@
     "test-node": "npm run build-test && mocha dist/test/*.spec.js && rm -rf dist/test || true"
   },
   "dependencies": {
-    "@digitalbazaar/vc-status-list-context": "^3.0.1",
+    "@digitalbazaar/credentials-v2-context": "github:digitalbazaar/credentials-v2-context#main",
+    "@digitalbazaar/vc-bitstring-status-list-context": "^1.0.0",
     "@digitalcredentials/bnid": "^2.1.2",
     "@digitalcredentials/crypto-ld": "^7.0.6",
     "@digitalcredentials/did-method-key": "^2.0.3",
     "@digitalcredentials/ed25519-signature-2020": "^3.0.2",
     "@digitalcredentials/ed25519-verification-key-2020": "^4.0.0",
-    "@digitalcredentials/security-document-loader": "^5.0.0",
-    "@digitalcredentials/vc-data-model": "^1.1.1",
-    "@digitalcredentials/vc-status-list": "^8.0.0",
+    "@digitalcredentials/security-document-loader": "github:digitalcredentials/security-document-loader#add-vc-2.0-context",
+    "@digitalcredentials/vc": "github:digitalcredentials/vc#vc-2.0-time-props",
+    "@digitalcredentials/vc-bitstring-status-list": "github:digitalcredentials/vc-bitstring-status-list#add-vc-2.0",
+    "@digitalcredentials/vc-data-model": "github:digitalcredentials/vc-data-model#add-vc-2.0",
     "@digitalcredentials/x25519-key-agreement-key-2020": "^3.0.0",
     "@interop/did-web-resolver": "^3.0.1",
+    "credentials-context": "^2.0.0",
     "mongodb": "^6.3.0",
     "uuid": "^9.0.1"
   },
@@ -94,6 +97,7 @@
     "karma-mocha-reporter": "^2.2.5",
     "karma-sourcemap-loader": "^0.4.0",
     "karma-typescript": "^5.5.4",
+    "karma-typescript-es6-transform": "^5.5.4",
     "mocha": "^10.3.0",
     "mongodb-memory-server": "^9.1.6",
     "prettier": "^3.2.5",

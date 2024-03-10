@@ -1,3 +1,6 @@
+/*!
+ * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
+ */
 module.exports = function (config) {
   config.set({
     // base path that will be used to resolve all patterns (eg. files, exclude)
@@ -7,15 +10,20 @@ module.exports = function (config) {
 
     files: [
       'src/**/*.ts',
-      'test/**/*.ts' // *.tsx for React Jsx
+      'test/**/*.ts'
     ],
 
     karmaTypescriptConfig: {
-      reports: {} // Disables the code coverage report
+      bundlerOptions: {
+        transforms: [
+          require('karma-typescript-es6-transform')()
+        ]
+      },
+      reports: {}
     },
 
     preprocessors: {
-      '**/*.ts': 'karma-typescript' // *.tsx for React Jsx
+      '**/*.ts': 'karma-typescript'
     },
 
     reporters: ['mocha', 'karma-typescript'],

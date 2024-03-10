@@ -1,3 +1,6 @@
+/*!
+ * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
+ */
 import dns from 'dns';
 import {
   ClientSession,
@@ -87,7 +90,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   async getDatabaseUrl(options?: MongoDbConnectionOptions): Promise<string> {
     const optionsObject = options ?? {};
 
-    if (!Object.entries(optionsObject).length) {
+    if (Object.entries(optionsObject).length === 0) {
       return this.getDatabaseUrlHelper({
         databaseUrl: this.databaseUrl,
         databaseHost: this.databaseHost,

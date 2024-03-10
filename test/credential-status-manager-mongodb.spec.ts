@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2023 Digital Credentials Consortium. All rights reserved.
+ * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
 import 'mocha';
 import { expect } from 'chai';
@@ -10,7 +10,6 @@ import { createStatusManager } from '../src/index.js';
 import {
   BaseCredentialStatusManager,
   BaseCredentialStatusManagerOptions,
-  CredentialState,
   DatabaseService
 } from '../src/credential-status-manager-base.js';
 import * as MongoDbStatus from '../src/credential-status-manager-mongodb.js';
@@ -89,7 +88,9 @@ describe('MongoDB Credential Status Manager', () => {
       databasePassword,
       statusCredentialSiteOrigin,
       didMethod,
-      didSeed
+      didSeed,
+      signStatusCredential: true,
+      signUserCredential: true
     }) as MongoDbStatus.MongoDbCredentialStatusManager;
     await (statusManager as MockMongoDbCredentialStatusManager).startDatabase();
   });
@@ -105,19 +106,19 @@ describe('MongoDB Credential Status Manager', () => {
 
   it('tests allocateStatus', async () => {
     // allocate and check status for first credential
-    const credentialWithStatus1 = await statusManager.allocateStatus(unsignedCredential1) as any;
+    const credentialWithStatus1 = await statusManager.allocateRevocationStatus(unsignedCredential1) as any;
     checkLocalCredentialStatus(credentialWithStatus1, 1, databaseService);
 
     // allocate and check status for second credential
-    const credentialWithStatus2 = await statusManager.allocateStatus(unsignedCredential2) as any;
+    const credentialWithStatus2 = await statusManager.allocateRevocationStatus(unsignedCredential2) as any;
     checkLocalCredentialStatus(credentialWithStatus2, 2, databaseService);
 
     // allocate and check status for third credential
-    const credentialWithStatus3 = await statusManager.allocateStatus(unsignedCredential3) as any;
+    const credentialWithStatus3 = await statusManager.allocateRevocationStatus(unsignedCredential3) as any;
     checkLocalCredentialStatus(credentialWithStatus3, 3, databaseService);
 
     // attempt to allocate and check status for existing credential
-    const credentialWithStatus2Copy = await statusManager.allocateStatus(unsignedCredential2) as any;
+    const credentialWithStatus2Copy = await statusManager.allocateRevocationStatus(unsignedCredential2) as any;
     checkLocalCredentialStatus(credentialWithStatus2Copy, 2, databaseService);
 
     // check if database has valid configuration
@@ -127,13 +128,10 @@ describe('MongoDB Credential Status Manager', () => {
 
   it('tests updateStatus and checkStatus', async () => {
     // allocate status for credential
-    const credentialWithStatus = await statusManager.allocateStatus(unsignedCredential1) as any;
+    const credentialWithStatus = await statusManager.allocateRevocationStatus(unsignedCredential1) as any;
 
     // update status of credential
-    const statusCredential = await statusManager.updateStatus({
-      credentialId: credentialWithStatus.id,
-      credentialStatus: 'revoked' as CredentialState
-    }) as any;
+    const statusCredential = await statusManager.revokeCredential(credentialWithStatus.id) as any;
 
     // check status credential
     checkStatusCredential(statusCredential, databaseService);

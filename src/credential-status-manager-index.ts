@@ -1,5 +1,5 @@
 /*!
- * Copyright (c) 2023 Digital Credentials Consortium. All rights reserved.
+ * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
 import {
   BaseCredentialStatusManager,

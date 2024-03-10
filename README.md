@@ -3,7 +3,7 @@
 [![Build status](https://img.shields.io/github/actions/workflow/status/digitalcredentials/credential-status-manager-db/main.yml?branch=main)](https://github.com/digitalcredentials/credential-status-manager-db/actions?query=workflow%3A%22Node.js+CI%22)
 [![NPM Version](https://img.shields.io/npm/v/@digitalcredentials/credential-status-manager-db.svg)](https://npm.im/@digitalcredentials/credential-status-manager-db)
 
-> A Typescript library for managing the status of [Verifiable Credentials](https://www.w3.org/TR/vc-data-model) in a database using [Status List 2021](https://w3c-ccg.github.io/vc-status-list-2021)
+> A Typescript library for managing the status of [Verifiable Credentials](https://www.w3.org/TR/vc-data-model) in a database using [Bitstring Status List](https://www.w3.org/TR/vc-bitstring-status-list)
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@
 
 ## Background
 
-Credentials are dynamic artifacts with a lifecycle that goes well beyond issuance. This lifecycle is liable to span revocation, suspension, and expiry, among other common states. Many proposals have been put forth to capture these statuses in Verifiable Credentials. One of the most mature specifications for this is [Status List 2021](https://w3c-ccg.github.io/vc-status-list-2021). This library provides an implementation of this specification that leverages database services like MongoDB and MySQL for storage and authentication.
+Credentials are dynamic artifacts with a lifecycle that goes well beyond issuance. This lifecycle is liable to span revocation, suspension, and expiry, among other common states. Many proposals have been put forth to capture these statuses in Verifiable Credentials. One of the most mature specifications for this is [Bitstring Status List](https://www.w3.org/TR/vc-bitstring-status-list). This library provides an implementation of this specification that leverages database services like MongoDB and MySQL for storage and authentication.
 
 ## Install
 
@@ -97,14 +97,14 @@ const statusManager = await createStatusManager({
 
 ### Allocate status for credential
 
-`allocateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential as input, records its status in a previously configured database instance, and returns the credential with status metadata attached.
+`allocateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential and status purpose as input (options: `revocation` | `suspension`), records its status in a previously configured database instance, and returns the credential with status metadata attached.
 
 Here is a sample call to `allocateStatus`:
 
 ```ts
 const credential = {
   '@context': [
-    'https://www.w3.org/2018/credentials/v1',
+    'https://www.w3.org/ns/credentials/v2',
     'https://w3id.org/security/suites/ed25519-2020/v1'
   ],
   id: 'https://credentials.example.edu/3732',
@@ -112,28 +112,29 @@ const credential = {
     'VerifiableCredential'
   ],
   issuer: 'did:key:z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC',
-  issuanceDate: '2020-03-10T04:24:12.164Z',
+  validFrom: '2020-03-10T04:24:12.164Z',
   credentialSubject: {
     id: 'did:example:abcdef'
   }
 };
-const credentialWithStatus = await statusManager.allocateStatus(credential);
+const credentialWithStatus = await statusManager.allocateStatus({
+  credential,
+  statusPurpose: 'revocation'
+});
 console.log(credentialWithStatus);
 /*
 {
   '@context': [
-    'https://www.w3.org/2018/credentials/v1',
-    'https://w3id.org/security/suites/ed25519-2020/v1',
-    'https://w3id.org/vc/status-list/2021/v1'
+    'https://www.w3.org/ns/credentials/v2'
   ],
   id: 'https://credentials.example.edu/3732',
   type: [ 'VerifiableCredential' ],
   issuer: 'did:key:z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC',
-  issuanceDate: '2020-03-10T04:24:12.164Z',
+  validFrom: '2020-03-10T04:24:12.164Z',
   credentialSubject: { id: 'did:example:abcdef' },
   credentialStatus: {
     id: 'https://credentials.example.edu/status/V27UAUYPNR#1',
-    type: 'StatusList2021Entry',
+    type: 'BitstringStatusListEntry',
     statusPurpose: 'revocation',
     statusListIndex: '1',
     statusListCredential: 'https://credentials.example.edu/status/V27UAUYPNR'
@@ -142,39 +143,42 @@ console.log(credentialWithStatus);
 */
 ```
 
-**Note:** If the caller invokes `allocateStatus` multiple times with the same credential ID against the same instance of a credential status manager, the library will not allocate a new entry. It will just return a credential with the same status info as it did in the previous invocation.
+**Note:** You can also call `allocateRevocationStatus(credential)` to achieve the same effect as `allocateStatus({ credential, statusPurpose: 'revocation' })` and `allocateSuspensionStatus(credential)` to achieve the same effect as `allocateStatus({ credential, statusPurpose: 'suspension' })`.
+
+Additionally, if the caller invokes `allocateStatus` multiple times with the same credential ID against the same instance of a credential status manager, the library will not allocate a new entry. It will just return a credential with the same status info as it did in the previous invocation.
 
 ### Update status of credential
 
-`updateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential ID and desired credential status as input (options: `active` | `revoked`), records its new status in a previously configured database instance, and returns the status credential.
+`updateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential ID and the desired credential state as input (options: `active` | `revoked` | `suspended`), records its new status in a previously configured database instance, and returns the status credential.
 
 Here is a sample call to `updateStatus`:
 
 ```ts
 const statusCredential = await statusManager.updateStatus({
   credentialId: credentialWithStatus.id,
-  credentialStatus: 'revoked'
+  credentialState: 'revoked'
 });
 console.log(statusCredential);
 /*
 {
   '@context': [
-    'https://www.w3.org/2018/credentials/v1',
-    'https://w3id.org/vc/status-list/2021/v1'
+    'https://www.w3.org/ns/credentials/v2'
   ],
   id: 'https://credentials.example.edu/status/V27UAUYPNR',
-  type: [ 'VerifiableCredential', 'StatusList2021Credential' ],
+  type: [ 'VerifiableCredential', 'BitstringStatusListCredential' ],
   credentialSubject: {
     id: 'https://credentials.example.edu/status/V27UAUYPNR#list',
-    type: 'StatusList2021',
+    type: 'BitstringStatusList',
     encodedList: 'H4sIAAAAAAAAA-3BMQ0AAAACIGf_0LbwAhoAAAAAAAAAAAAAAIC_AfqBUGnUMAAA',
     statusPurpose: 'revocation'
   },
   issuer: 'did:key:z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC',
-  issuanceDate: '2023-03-15T19:21:54.093Z'
+  validFrom: '2024-03-10T00:00:00.000Z'
 }
 */
 ```
+
+**Note:** You can also call `revokeCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, credentialState: 'revoked' })` and `suspendCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, credentialState: 'suspended' })`.
 
 ### Check status of credential
 
@@ -188,7 +192,7 @@ console.log(credentialStatus);
 /*
 {
   id: 'b3153335-5814-47c1-9ee2-eb173d055d13',
-  timestamp: '2023-03-15T19:39:06.023Z',
+  timestamp: '2024-03-15T19:39:06.023Z',
   credentialId: 'https://credentials.example.edu/3732',
   credentialIssuer: 'did:key:z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC',
   credentialSubject: 'did:example:abcdef',
@@ -209,7 +213,7 @@ There is a lot of data that is managed by this service. In this section, we will
 | Key | Description | Type |
 | --- | --- | --- |
 | `id` | ID of the database record | string |
-| `credential` | Status List 2021 verifiable credential | object ([BitstringStatusListCredential](https://www.w3.org/TR/vc-bitstring-status-list#bitstringstatuslistcredential)) |
+| `credential` | Bitstring Status List Verifiable Credential | object ([BitstringStatusListCredential](https://www.w3.org/TR/vc-bitstring-status-list#bitstringstatuslistcredential)) |
 
 ### `Config`
 
@@ -230,7 +234,7 @@ There is a lot of data that is managed by this service. In this section, we will
 | `credentialId` | ID of the credential associated with the event | string |
 | `credentialIssuer` | ID of the issuer of the credential associated with the event | string |
 | `credentialSubject` | ID of the subject of the credential associated with the event | string |
-| `credentialState` | state of the credential associated with the event | `active` \| `revoked` |
+| `credentialState` | state of the credential associated with the event | `active` \| `revoked` \| `suspended` |
 | `verificationMethod` | reference of the public key used to sign the credential associated with the event | string |
 | `statusCredentialId` | ID of the status credential associated with the event | string |
 | `credentialStatusIndex` | position allocated on the status credential for the credential associated with the event | number |
