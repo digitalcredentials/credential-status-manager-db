@@ -756,6 +756,15 @@ export abstract class BaseCredentialStatusManager {
     });
   }
 
+  // lifts suspension from credential
+  async unsuspendCredential(credentialId: string): Promise<VerifiableCredential> {
+    return this.updateStatus({
+      credentialId,
+      statusPurpose: StatusPurpose.Suspension,
+      invalidate: false
+    });
+  }
+
   // retrieves status of credential with given ID
   async getStatus(credentialId: string, options?: DatabaseConnectionOptions): Promise<CredentialStatusInfo> {
     // retrieve user credential record
@@ -966,6 +975,7 @@ export abstract class BaseCredentialStatusManager {
 
       // examine info for all status purposes
       const statusPurposes = Object.keys(statusCredentialInfo) as StatusPurpose[];
+      const statusPurposesCounter = statusPurposes.length;
       let credsIssuedCounter = 0;
       for (const statusPurpose of statusPurposes) {
         const {
@@ -1039,7 +1049,9 @@ export abstract class BaseCredentialStatusManager {
       const credentialIds = await this.getAllUserCredentialIds(options);
       const credentialIdsCounter = credentialIds.length;
       const hasValidIssuedCounterCredentialToConfig = credentialIdsCounter === credentialsIssuedCounter;
-      const hasValidIssuedCounterConfigToReality = credentialsIssuedCounter === credsIssuedCounter;
+      const hasValidIssuedCounterConfigToReality =
+        credentialsIssuedCounter <= credsIssuedCounter &&
+        credsIssuedCounter <= credentialsIssuedCounter * statusPurposesCounter;
 
       // check if credential issuance counter matches between
       // credential table and config table
