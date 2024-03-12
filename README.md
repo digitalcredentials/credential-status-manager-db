@@ -181,7 +181,7 @@ console.log(statusCredential);
 */
 ```
 
-**Note:** You can also call `revokeCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, statusPurpose: 'revocation', invalidate: true })` and `suspendCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, statusPurpose: 'suspension', invalidate: true })`.
+**Note:** You can also call `revokeCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, statusPurpose: 'revocation', invalidate: true })` and `suspendCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, statusPurpose: 'suspension', invalidate: true })`. Also note that `unsuspendCredential(credentialId)` will lift a suspension from a credential, while there is no equivalent reversal logic for revocation, since it is not allowed.
 
 ### Check status of credential
 
