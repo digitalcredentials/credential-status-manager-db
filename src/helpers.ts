@@ -94,6 +94,20 @@ export function validateCredential(credential: VerifiableCredential): void {
   }
 }
 
+// retrieves credential subject entry
+export function getCredentialSubjectObject(credential: VerifiableCredential): any {
+  // report error for compact JWT credentials
+  if (typeof credential === 'string') {
+    throw new BadRequestError({
+      message: 'This library does not support compact JWT credentials.'
+    });
+  }
+  if (Array.isArray(credential.credentialSubject)) {
+    return credential.credentialSubject[0];
+  }
+  return credential.credentialSubject;
+}
+
 // signs credential
 export async function signCredential({
   credential,
@@ -158,21 +172,6 @@ export async function getSigningMaterial({
   };
 }
 
-// decodes system data as JSON
-export function decodeSystemData(text: string): any {
-  return JSON.parse(decodeBase64AsAscii(text));
-}
-
-// encodes ASCII text as Bas64
-export function encodeAsciiAsBase64(text: string): string {
-  return Buffer.from(text).toString('base64');
-}
-
-// decodes Bas64 text as ASCII
-function decodeBase64AsAscii(text: string): string {
-  return Buffer.from(text, 'base64').toString('ascii');
-}
-
 // decodes DID seed
 function decodeSeed(didSeed: string): Uint8Array {
   let didSeedBytes;
@@ -193,25 +192,6 @@ function extractId(objectOrString: any): string {
     return objectOrString;
   } 
   return objectOrString.id;
-}
-
-// retrieves credential subject entry
-export function getCredentialSubjectObject(credential: VerifiableCredential): any {
-  // report error for compact JWT credentials
-  if (typeof credential === 'string') {
-    throw new BadRequestError({
-      message: 'This library does not support compact JWT credentials.'
-    });
-  }
-  if (Array.isArray(credential.credentialSubject)) {
-    return credential.credentialSubject[0];
-  }
-  return credential.credentialSubject;
-}
-
-// derives abbreviated ID from status credential URL
-export function deriveStatusCredentialId(statusCredentialUrl: string): string {
-  return statusCredentialUrl.split('/').slice(-1).pop() as string;
 }
 
 // retrieves current timestamp

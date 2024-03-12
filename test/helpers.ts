@@ -2,9 +2,6 @@
  * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
 import { expect } from 'chai';
-import {
-  DatabaseService
-} from '../src/credential-status-manager-base.js';
 import { DidMethod } from '../src/helpers.js';
 
 const credentialId1 = 'https://credentials.example.edu/3732';
@@ -13,7 +10,6 @@ const credentialId3 = 'https://credentials.example.edu/0285';
 const credentialSubject = 'did:example:abcdef';
 const issuerKey = 'z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC';
 const issuerDid = `did:key:${issuerKey}`;
-const verificationMethod = `${issuerDid}#${issuerKey}`;
 
 const unsignedCredential = {
   '@context': [
@@ -53,15 +49,8 @@ export const statusCredentialId = 'V27UAUYPNR';
 
 export function checkLocalCredentialStatus(
   credentialWithStatus: any,
-  credentialStatusIndex: number,
-  databaseService: DatabaseService
+  statusListIndex: number
 ) {
-  let statusCredentialUrl;
-  switch (databaseService) {
-    case DatabaseService.MongoDB:
-      statusCredentialUrl = `${statusCredentialSiteOrigin}/${statusCredentialId}`;
-      break;
-  }
   expect(credentialWithStatus).to.have.property('credentialStatus');
   expect(credentialWithStatus.credentialStatus).to.have.property('id');
   expect(credentialWithStatus.credentialStatus).to.have.property('type');
@@ -70,43 +59,27 @@ export function checkLocalCredentialStatus(
   expect(credentialWithStatus.credentialStatus).to.have.property('statusListCredential');
   expect(credentialWithStatus.credentialStatus.type).to.equal('BitstringStatusListEntry');
   expect(credentialWithStatus.credentialStatus.statusPurpose).to.equal('revocation');
-  expect(credentialWithStatus.credentialStatus.statusListIndex).to.equal(credentialStatusIndex.toString());
-  expect(credentialWithStatus.credentialStatus.id.startsWith(statusCredentialUrl)).to.be.true;
-  expect(credentialWithStatus.credentialStatus.statusListCredential.startsWith(statusCredentialUrl)).to.be.true;
+  expect(credentialWithStatus.credentialStatus.statusListIndex).to.equal(statusListIndex.toString());
+  expect(credentialWithStatus.credentialStatus.id.startsWith(statusCredentialSiteOrigin)).to.be.true;
+  expect(credentialWithStatus.credentialStatus.statusListCredential.startsWith(statusCredentialSiteOrigin)).to.be.true;
 }
 
 export function checkRemoteCredentialStatus(
-  credentialStatus: any,
-  credentialId: string,
-  credentialStatusIndex: number
+  statusInfo: any,
+  statusListIndex: number,
+  valid: boolean
 ) {
-  expect(credentialStatus).to.have.property('timestamp');
-  expect(credentialStatus).to.have.property('credentialId');
-  expect(credentialStatus).to.have.property('credentialIssuer');
-  expect(credentialStatus).to.have.property('credentialSubject');
-  expect(credentialStatus).to.have.property('credentialState');
-  expect(credentialStatus).to.have.property('verificationMethod');
-  expect(credentialStatus).to.have.property('statusCredentialId');
-  expect(credentialStatus).to.have.property('credentialStatusIndex');
-  expect(credentialStatus.credentialId).to.equal(credentialId);
-  expect(credentialStatus.credentialIssuer).to.equal(issuerDid);
-  expect(credentialStatus.credentialSubject).to.equal(credentialSubject);
-  expect(credentialStatus.credentialState).to.equal('revoked');
-  expect(credentialStatus.verificationMethod).to.equal(verificationMethod);
-  expect(credentialStatus.statusCredentialId).to.equal(statusCredentialId);
-  expect(credentialStatus.credentialStatusIndex).to.equal(credentialStatusIndex);
+  expect(statusInfo).to.have.property('revocation');
+  expect(statusInfo.revocation).to.have.property('statusCredentialId');
+  expect(statusInfo.revocation).to.have.property('statusListIndex');
+  expect(statusInfo.revocation).to.have.property('valid');
+  expect(statusInfo.revocation.statusListIndex).to.equal(statusListIndex);
+  expect(statusInfo.revocation.valid).to.equal(valid);
 }
 
 export function checkStatusCredential(
-  statusCredential: any,
-  databaseService: DatabaseService
+  statusCredential: any
 ) {
-  let statusCredentialUrl;
-  switch (databaseService) {
-    case DatabaseService.MongoDB:
-      statusCredentialUrl = `${statusCredentialSiteOrigin}/${statusCredentialId}`;
-      break;
-  }
   expect(statusCredential).to.have.property('id');
   expect(statusCredential).to.have.property('type');
   expect(statusCredential).to.have.property('credentialSubject');
@@ -114,9 +87,25 @@ export function checkStatusCredential(
   expect(statusCredential.credentialSubject).to.have.property('type');
   expect(statusCredential.credentialSubject).to.have.property('encodedList');
   expect(statusCredential.credentialSubject).to.have.property('statusPurpose');
-  expect(statusCredential.id).to.equal(statusCredentialUrl);
+  expect(statusCredential.id.startsWith(statusCredentialSiteOrigin)).to.be.true;
   expect(statusCredential.type).to.include('BitstringStatusListCredential');
-  expect(statusCredential.credentialSubject.id.startsWith(statusCredentialUrl)).to.be.true;
+  expect(statusCredential.credentialSubject.id.startsWith(statusCredentialSiteOrigin)).to.be.true;
   expect(statusCredential.credentialSubject.type).to.equal('BitstringStatusList');
   expect(statusCredential.credentialSubject.statusPurpose).to.equal('revocation');
+}
+
+export function checkUserCredentialInfo(
+  credentialId: string,
+  credentialRecord: any,
+  statusListIndex: number,
+  valid: boolean
+) {
+  expect(credentialRecord).to.have.property('id');
+  expect(credentialRecord).to.have.property('issuer');
+  expect(credentialRecord).to.have.property('subject');
+  expect(credentialRecord).to.have.property('statusInfo');
+  expect(credentialRecord.id).to.equal(credentialId);
+  expect(credentialRecord.issuer).to.equal(issuerDid);
+  expect(credentialRecord.subject).to.equal(credentialSubject);
+  checkRemoteCredentialStatus(credentialRecord.statusInfo, statusListIndex, valid);
 }

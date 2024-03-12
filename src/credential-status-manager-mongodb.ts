@@ -357,7 +357,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     return record as T | null;
   }
 
-  // retrieves all records in table
+  // retrieves all database records
   async getAllRecords<T>(tableName: string, options?: MongoDbConnectionOptions): Promise<T[]> {
     const optionsObject = options ?? {};
     const { client: clientCandidate, session } = optionsObject;
@@ -369,6 +369,28 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       ({ client } = databaseConnection);
       const table = database.collection(tableName);
       const query = {};
+      records = await table.find(query, { session }).toArray();
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
+    return records as T[];
+  }
+
+  // retrieves all database records by field
+  async getAllRecordsByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: MongoDbConnectionOptions): Promise<T[]> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
+    let records = [];
+    try {
+      const databaseConnection = await this.connectDatabase(options);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const query = { [fieldKey]: fieldValue };
       records = await table.find(query, { session }).toArray();
     } finally {
       if (!session) {
