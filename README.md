@@ -18,6 +18,7 @@
   - [Check status of credential](#check-status-of-credential)
 - [Schemas](schemas)
   - [`StatusCredential`](#statuscredential)
+  - [`UserCredential`](#usercredential)
   - [`Config`](#config)
   - [`Event`](#event)
   - [`CredentialEvent`](#credentialevent)
@@ -69,6 +70,7 @@ The `createStatusManager` function is the only exported pure function of this li
 | `databasePassword` | password associated with `databaseUsername` | string | yes (if `databaseUrl` is not set) |
 | `databaseName` | name of the database instance used to manage credential status data | string | no (default: `credentialStatus`) |
 | `statusCredentialTableName` | name of the database table used to manage status credentials ([schema](#statuscredential)) | string | no (default: `StatusCredential`) |
+| `userCredentialTableName` | name of the database table used to manage user credentials ([schema](#usercredential)) | string | no (default: `UserCredential`) |
 | `configTableName` | name of the database table used to manage application configuration ([schema](#config)) | string | no (default: `Config`) |
 | `eventTableName` | name of the database table used to manage credential status events ([schema](#event)) | string | no (default: `Event`) |
 | `credentialEventTableName` | name of the database table used to manage the latest status event for a given credential ([schema](#credentialevent)) | string | no (default: `CredentialEvent`) |
@@ -97,7 +99,7 @@ const statusManager = await createStatusManager({
 
 ### Allocate status for credential
 
-`allocateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential and status purpose as input (options: `revocation` | `suspension`), records its status in a previously configured database instance, and returns the credential with status metadata attached.
+`allocateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential and an array of status purposes as input (options: `revocation` | `suspension`), records its status in a previously configured database instance, and returns the credential with status metadata attached.
 
 Here is a sample call to `allocateStatus`:
 
@@ -119,7 +121,7 @@ const credential = {
 };
 const credentialWithStatus = await statusManager.allocateStatus({
   credential,
-  statusPurpose: 'revocation'
+  statusPurposes: ['revocation']
 });
 console.log(credentialWithStatus);
 /*
@@ -143,20 +145,21 @@ console.log(credentialWithStatus);
 */
 ```
 
-**Note:** You can also call `allocateRevocationStatus(credential)` to achieve the same effect as `allocateStatus({ credential, statusPurpose: 'revocation' })` and `allocateSuspensionStatus(credential)` to achieve the same effect as `allocateStatus({ credential, statusPurpose: 'suspension' })`.
+**Note:** You can also call `allocateRevocationStatus(credential)` to achieve the same effect as `allocateStatus({ credential, statusPurposes: ['revocation'] })` and `allocateSuspensionStatus(credential)` to achieve the same effect as `allocateStatus({ credential, statusPurposes: ['suspension'] })`.
 
 Additionally, if the caller invokes `allocateStatus` multiple times with the same credential ID against the same instance of a credential status manager, the library will not allocate a new entry. It will just return a credential with the same status info as it did in the previous invocation.
 
 ### Update status of credential
 
-`updateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential ID and the desired credential state as input (options: `active` | `revoked` | `suspended`), records its new status in a previously configured database instance, and returns the status credential.
+`updateStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts as input a credential ID, a status purpose (options: `revocation` | `suspension`), and whether to invalidate the status; records its new status in a previously configured database instance; and returns the status credential.
 
 Here is a sample call to `updateStatus`:
 
 ```ts
 const statusCredential = await statusManager.updateStatus({
   credentialId: credentialWithStatus.id,
-  credentialState: 'revoked'
+  statusPurpose: 'revocation',
+  invalidate: true
 });
 console.log(statusCredential);
 /*
@@ -178,28 +181,29 @@ console.log(statusCredential);
 */
 ```
 
-**Note:** You can also call `revokeCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, credentialState: 'revoked' })` and `suspendCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, credentialState: 'suspended' })`.
+**Note:** You can also call `revokeCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, statusPurpose: 'revocation', invalidate: true })` and `suspendCredential(credentialId)` to achieve the same effect as `updateStatus({ credentialId, statusPurpose: 'suspension', invalidate: true })`.
 
 ### Check status of credential
 
-`checkStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential ID as input and returns status information for the credential.
+`getStatus` is an instance method that is called on a credential status manager initialized by `createStatusManager`. It is an asynchronous method that accepts a credential ID as input and returns status information for the credential.
 
-Here is a sample call to `checkStatus`:
+Here is a sample call to `getStatus`:
 
 ```ts
-const credentialStatus = await statusManager.checkStatus(credentialWithStatus.id);
+const credentialStatus = await statusManager.getStatus(credentialWithStatus.id);
 console.log(credentialStatus);
 /*
 {
-  id: 'b3153335-5814-47c1-9ee2-eb173d055d13',
-  timestamp: '2024-03-15T19:39:06.023Z',
-  credentialId: 'https://credentials.example.edu/3732',
-  credentialIssuer: 'did:key:z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC',
-  credentialSubject: 'did:example:abcdef',
-  credentialState: 'revoked',
-  verificationMethod: 'did:key:z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC#z6MkhVTX9BF3NGYX6cc7jWpbNnR7cAjH8LUffabZP8Qu4ysC',
-  statusCredentialId: 'V27UAUYPNR',
-  credentialStatusIndex: 1
+  revocation: {
+    statusCredentialId: 'V27UAUYPNR',
+    statusListIndex: 1,
+    valid: true
+  },
+  suspension: {
+    statusCredentialId: '4R7EA3YPTR',
+    statusListIndex: 1,
+    valid: false
+  }
 }
 */
 ```
@@ -212,39 +216,49 @@ There is a lot of data that is managed by this service. In this section, we will
 
 | Key | Description | Type |
 | --- | --- | --- |
-| `id` | ID of the database record | string |
+| `id` | ID of the status credential database record | string |
 | `credential` | Bitstring Status List Verifiable Credential | object ([BitstringStatusListCredential](https://www.w3.org/TR/vc-bitstring-status-list#bitstringstatuslistcredential)) |
+
+### `UserCredential`
+
+| Key | Description | Type |
+| --- | --- | --- |
+| `id` | ID of the user credential database record | string |
+| `issuer` | ID of the issuer of the credential | string |
+| `subject` | ID of the subject of the credential | string |
+| `statusInfo` | mapping from status purpose to status info | object |
+| `statusInfo[PURPOSE].statusCredentialId` | ID of the status credential associated with the credential for a given purpose | string |
+| `statusInfo[PURPOSE].statusListIndex` | position allocated on the status credential for the credential for a given purpose | number |
+| `statusInfo[PURPOSE].valid` | validity of the credential according to the status credential tracking its status for a given purpose | boolean |
 
 ### `Config`
 
 | Key | Description | Type |
 | --- | --- | --- |
-| `id` | ID of the database record | string |
+| `id` | ID of the config database record | string |
 | `statusCredentialSiteOrigin` | base URL of status credentials managed by a given deployment | string |
-| `latestStatusCredentialId` | ID of the latest status credential to be created in a given deployment | string |
-| `latestCredentialsIssuedCounter` | number of credentials to be issued against the latest status credential to be created in a given deployment | number |
-| `allCredentialsIssuedCounter` | total number of credentials to be issued in a given deployment | number |
+| `statusCredentialInfo` | mapping from status purpose to status credential info | object |
+| `statusCredentialInfo[PURPOSE].latestStatusCredentialId` | ID of the latest status credential to be created for a given purpose in a given deployment | string |
+| `statusCredentialInfo[PURPOSE].latestCredentialsIssuedCounter` | number of credentials issued against the latest status credential for a given purpose in a given deployment | number |
+| `statusCredentialInfo[PURPOSE].statusCredentialsCounter` | total number of status credentials for a given purpose in a given deployment | number |
+| `credentialsIssuedCounter` | total number of credentials issued in a given deployment | number |
 
 ### `Event`
 
 | Key | Description | Type |
 | --- | --- | --- |
-| `id` | ID of the database record | string |
+| `id` | ID of the event database record | string |
 | `timestamp` | ISO timestamp of the moment that the event was recorded | string |
 | `credentialId` | ID of the credential associated with the event | string |
-| `credentialIssuer` | ID of the issuer of the credential associated with the event | string |
-| `credentialSubject` | ID of the subject of the credential associated with the event | string |
-| `credentialState` | state of the credential associated with the event | `active` \| `revoked` \| `suspended` |
-| `verificationMethod` | reference of the public key used to sign the credential associated with the event | string |
-| `statusCredentialId` | ID of the status credential associated with the event | string |
-| `credentialStatusIndex` | position allocated on the status credential for the credential associated with the event | number |
+| `statusPurpose` | name of the purpose of the credential status whose modification is being tracked by the event | `revocation` \| `suspension` (see `statusPurpose` [here](https://www.w3.org/TR/vc-bitstring-status-list#bitstringstatuslistcredential)) |
+| `valid` | validity of the credential that is being applied by the event | boolean |
 
 ### `CredentialEvent`
 
 | Key | Description | Type |
 | --- | --- | --- |
-| `credentialId` | ID of a previously issued credential | string |
-| `eventId` | ID of the latest status event for credential with ID `credentialId` | string |
+| `credentialId` | ID of a previously issued credential database record | string |
+| `eventId` | ID of the latest status event database record for credential with ID `credentialId` | string |
 
 ## Dependencies
 
