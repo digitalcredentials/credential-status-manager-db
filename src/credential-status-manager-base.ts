@@ -21,9 +21,6 @@ import {
   validateCredential
 } from './helpers.js';
 
-/* eslint-disable @typescript-eslint/restrict-template-expressions */
-/* eslint-disable @typescript-eslint/consistent-type-assertions */
-
 // Number of credentials tracked in a list
 const CREDENTIAL_STATUS_LIST_SIZE = 100000;
 

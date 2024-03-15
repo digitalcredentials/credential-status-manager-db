@@ -19,8 +19,6 @@ import {
   MissingDatabaseTableError
 } from './errors.js';
 
-/* eslint-disable @typescript-eslint/restrict-template-expressions */
-
 // Type definition for base options of createStatusManager function input
 interface CredentialStatusManagerBaseOptions {
   databaseService: DatabaseService;
