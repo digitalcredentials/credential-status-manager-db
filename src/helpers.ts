@@ -16,8 +16,6 @@ import * as DidWeb from '@interop/did-web-resolver';
 import { CryptoLD } from '@digitalcredentials/crypto-ld';
 import { BadRequestError, InvalidDidSeedError } from './errors.js';
 
-/* eslint-disable @typescript-eslint/restrict-template-expressions */
-
 // Crypto library for linked data
 const cryptoLd = new CryptoLD();
 cryptoLd.use(Ed25519VerificationKey2020);

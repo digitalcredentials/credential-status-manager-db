@@ -19,8 +19,6 @@ import {
 } from './credential-status-manager-base.js';
 import { BadRequestError, WriteConflictError } from './errors.js';
 
-/* eslint-disable @typescript-eslint/restrict-template-expressions */
-
 // Type definition for MongoDB connection
 interface MongoDbConnection {
   client: MongoClient;
