@@ -14,9 +14,11 @@ import {
 } from './errors.js';
 import {
   DidMethod,
+  MAX_ID_LENGTH,
   getCredentialSubjectObject,
   getDateString,
   getSigningMaterial,
+  isValidCredentialId,
   signCredential,
   validateCredential
 } from './helpers.js';
@@ -350,6 +352,13 @@ export abstract class BaseCredentialStatusManager {
       // Note: This assumes that uuid will never generate an ID that
       // conflicts with an ID that has already been tracked in the event log
       credentialCopy.id = this.generateUserCredentialId();
+    } else {
+      if(!isValidCredentialId(credentialCopy.id)) {
+        throw new BadRequestError({
+          message: 'The ID must be a URL, UUID, or DID ' +
+            `that is no more than ${MAX_ID_LENGTH} characters in length.`
+        });
+      }
     }
 
     // validate credential before attaching status
@@ -365,7 +374,10 @@ export abstract class BaseCredentialStatusManager {
     // only search for credential if it was passed with an ID
     if (credentialContainsId) {
       // retrieve record for credential with given ID
-      const credentialRecord = await this.getUserCredentialRecordById(credentialCopy.id, options);
+      let credentialRecord;
+      try {
+        credentialRecord = await this.getUserCredentialRecordById(credentialCopy.id, options);
+      } catch (error) {}
 
       // do not allocate new entry if ID is already being tracked
       if (credentialRecord) {
@@ -583,7 +595,7 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // allocates all supported statuses
-  async allocateAllStatuses(credential: VerifiableCredential): Promise<VerifiableCredential> {
+  async allocateSupportedStatuses(credential: VerifiableCredential): Promise<VerifiableCredential> {
     return this.allocateStatus({ credential, statusPurposes: SUPPORTED_STATUS_PURPOSES });
   }
 
@@ -594,13 +606,6 @@ export abstract class BaseCredentialStatusManager {
     return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // retrieve record for credential with given ID
       const oldCredentialRecord = await this.getUserCredentialRecordById(credentialId, options);
-
-      // unable to find credential with given ID
-      if (!oldCredentialRecord) {
-        throw new NotFoundError({
-          message: `Unable to find credential with ID "${credentialId}".`
-        });
-      }
 
       // retrieve relevant credential info
       const { statusInfo, ...oldCredentialRecordRest } = oldCredentialRecord;
@@ -766,14 +771,6 @@ export abstract class BaseCredentialStatusManager {
   async getStatus(credentialId: string, options?: DatabaseConnectionOptions): Promise<CredentialStatusInfo> {
     // retrieve user credential record
     const record = await this.getUserCredentialRecordById(credentialId, options);
-
-    // unable to find credential with given ID
-    if (!record) {
-      throw new NotFoundError({
-        message: `Unable to find credential with ID "${credentialId}".`
-      });
-    }
-
     return record.statusInfo;
   }
 
@@ -1269,19 +1266,29 @@ export abstract class BaseCredentialStatusManager {
   }
 
   // retrieves user credential record by ID
-  async getUserCredentialRecordById(userCredentialId: string, options?: DatabaseConnectionOptions): Promise<UserCredentialRecord | null> {
+  async getUserCredentialRecordById(userCredentialId: string, options?: DatabaseConnectionOptions): Promise<UserCredentialRecord> {
     let record;
     try {
       record = await this.getRecordById(this.userCredentialTableName, userCredentialId, options);
+      if (!record) {
+        throw new NotFoundError({
+          message: `Unable to find credential with ID "${userCredentialId}".`
+        });
+      }
     } catch (error: any) {
       if (error instanceof CustomError) {
         throw error;
       }
       throw new InternalServerError({
-        message: `Unable to get user credential with ID "${userCredentialId}": ${error.message}`
+        message: `Unable to get info for credential with ID "${userCredentialId}": ${error.message}`
       });
     }
-    return record as UserCredentialRecord | null;
+    return record as UserCredentialRecord;
+  }
+
+  // alias for getUserCredentialRecordById
+  async getCredentialInfo(userCredentialId: string, options?: DatabaseConnectionOptions): Promise<UserCredentialRecord> {
+    return this.getUserCredentialRecordById(userCredentialId, options);
   }
 
   // retrieves config record by ID
