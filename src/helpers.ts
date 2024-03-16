@@ -1,6 +1,7 @@
 /*!
  * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
+import * as uuid from 'uuid';
 import * as vc1Context from 'credentials-context';
 import * as vc2Context from '@digitalbazaar/credentials-v2-context';
 import * as vcBitstringStatusListContext from '@digitalbazaar/vc-bitstring-status-list-context';
@@ -27,6 +28,9 @@ const didKeyDriver = DidKey.driver();
 
 // Document loader
 const documentLoader = securityLoader().build();
+
+// Max length for IDs
+export const MAX_ID_LENGTH = 64;
 
 // DID method used to sign credentials
 export enum DidMethod {
@@ -190,6 +194,13 @@ function extractId(objectOrString: any): string {
     return objectOrString;
   } 
   return objectOrString.id;
+}
+
+// determines if credential ID is valid
+export function isValidCredentialId(credentialId: string): boolean {
+  const isValidFormat = URL.canParse(credentialId) || uuid.validate(credentialId);
+  const isValidLength = credentialId.length <= MAX_ID_LENGTH;
+  return isValidFormat && isValidLength;
 }
 
 // retrieves current timestamp

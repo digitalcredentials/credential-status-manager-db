@@ -121,12 +121,12 @@ describe('MongoDB Credential Status Manager', () => {
     expect(databaseState.valid).to.be.true;
   });
 
-  it('tests allocateRevocationStatus and getUserCredentialRecordById', async () => {
+  it('tests allocateRevocationStatus and getCredentialInfo', async () => {
     // allocate status for credential
     const credentialWithStatus = await statusManager.allocateRevocationStatus(unsignedCredential1) as any;
 
     // check user credential info
-    const credentialRecord = await statusManager.getUserCredentialRecordById(credentialWithStatus.id);
+    const credentialRecord = await statusManager.getCredentialInfo(credentialWithStatus.id);
     checkUserCredentialInfo(credentialWithStatus.id, credentialRecord, 1, true);
 
     // check if database has valid configuration
