@@ -29,7 +29,13 @@ interface CredentialStatusManagerBaseOptions {
 type CredentialStatusManagerOptions = CredentialStatusManagerBaseOptions &
   BaseCredentialStatusManagerOptions;
 
-// creates credential status manager
+/**
+ * Creates credential status manager for a given database service
+ * 
+ * @param {CredentialStatusManagerOptions} [options] - Credential status manager creation options.
+ * 
+ * @returns {Promise<BaseCredentialStatusManager>} Resolves to credential status manager for a given database service.
+ */
 export async function createStatusManager(options: CredentialStatusManagerOptions)
 : Promise<BaseCredentialStatusManager> {
   const {

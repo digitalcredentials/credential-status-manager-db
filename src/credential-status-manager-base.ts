@@ -163,9 +163,12 @@ export interface DatabaseConnectionOptions {
   databaseHost?: string;
   databasePort?: number;
   databaseUsername?: string;
-  databasePassword?: any;
+  databasePassword?: string;
   [x: string]: any;
 }
+
+// Type definition for executeTransaction method input
+type ExecuteTransactionFunction = (options?: DatabaseConnectionOptions) => Promise<any>;
 
 // Type definition for BaseCredentialStatusManager constructor method input
 export interface BaseCredentialStatusManagerOptions {
@@ -215,6 +218,11 @@ export abstract class BaseCredentialStatusManager {
   protected readonly signStatusCredential: boolean;
   protected readonly signUserCredential: boolean;
 
+  /**
+   * Constructs instance of BaseCredentialStatusManager
+   * 
+   * @param {BaseCredentialStatusManagerOptions} [options] - Credential status attachment options.
+   */
   constructor(options: BaseCredentialStatusManagerOptions) {
     const {
       statusCredentialSiteOrigin,
@@ -255,7 +263,11 @@ export abstract class BaseCredentialStatusManager {
     this.validateConfiguration(options);
   }
 
-  // ensures valid configuration of credential status manager
+  /**
+   * Ensures valid configuration of credential status manager
+   * 
+   * @returns {void}
+   */
   validateConfiguration(options: BaseCredentialStatusManagerOptions): void {
     const missingOptions = [] as
       Array<keyof BaseCredentialStatusManagerOptions>;
@@ -287,12 +299,20 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // retrieves database name
+  /**
+   * Retrieves database name
+   * 
+   * @returns {string[]} Returns database name.
+   */
   getDatabaseName(): string {
     return this.databaseName;
   }
 
-  // retrieves database table names
+  /**
+   * Retrieves database table names
+   * 
+   * @returns {string[]} Returns database table names.
+   */
   getDatabaseTableNames(): string[] {
     return [
       this.statusCredentialTableName,
@@ -303,21 +323,35 @@ export abstract class BaseCredentialStatusManager {
     ];
   }
 
-  // generates new status credential ID
-  // Note: We assume this method will never generate an ID that
-  // has previously been generated for a status credential in this system
+  /**
+   * Generates new status credential ID
+   *   Note: We assume this method will never generate an ID that
+   *   has previously been generated for a status credential in this system
+   * 
+   * @returns {string} Returns new status credential ID.
+   */
   generateStatusCredentialId(): string {
     return Math.random().toString(36).substring(2, 12).toUpperCase();
   }
 
-  // generates new user credential ID
-  // Note: We assume this method will never generate an ID that
-  // has previously been generated for a user credential in this system
+  /**
+   * Generates new user credential ID
+   *   Note: We assume this method will never generate an ID that
+   *   has previously been generated for a user credential in this system
+   * 
+   * @returns {string} Returns new user credential ID.
+   */
   generateUserCredentialId(): string {
     return `urn:uuid:${uuid()}`;
   }
 
-  // composes credentialStatus field of credential
+  /**
+   * Composes credentialStatus field of credential
+   * 
+   * @param {CredentialStatusInfo} [credentialStatusInfo] - Credential status info.
+   *
+   * @returns {any} Returns credentialStatus field of credential.
+   */
   composeCredentialStatus(credentialStatusInfo: CredentialStatusInfo): any {
     let credentialStatus: any = [];
     for (const [statusPurpose, statusData] of Object.entries(credentialStatusInfo)) {
@@ -338,7 +372,13 @@ export abstract class BaseCredentialStatusManager {
     return credentialStatus;
   }
 
-  // attaches status to credential
+  /**
+   * Attaches status to credential
+   * 
+   * @param {AttachCredentialStatusOptions} [options] - Credential status attachment options.
+   *
+   * @returns {Promise<AttachCredentialStatusResult>} Resolves to metadata associated with attached credential status.
+   */
   async attachCredentialStatus({ credential, statusPurposes }: AttachCredentialStatusOptions, options?: DatabaseConnectionOptions): Promise<AttachCredentialStatusResult> {
     // copy credential and delete appropriate fields
     const credentialCopy = Object.assign({}, credential);
@@ -461,7 +501,18 @@ export abstract class BaseCredentialStatusManager {
     };
   }
 
-  // allocates status for credential
+  /**
+   * Allocates status for credential
+   *
+   * @param {AllocateStatusOptions} [options={}] - The options to use.
+   * 
+   * @param {VerifiableCredential} [options.credential] - The credential for which to allocate status.
+   * @param {StatusPurpose[]} [options.statusPurposes] - The statuses to allocate for the credential.
+   *
+   * @throws {BadRequestError} If credential is in JWT format.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to new credential with status.
+   */
   async allocateStatus({ credential, statusPurposes }: AllocateStatusOptions): Promise<VerifiableCredential> {
     return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // report error for compact JWT credentials
@@ -584,22 +635,53 @@ export abstract class BaseCredentialStatusManager {
     });
   }
 
-  // allocates revocation status for credential
+  /**
+   * Allocates revocation status for credential
+   * 
+   * @param {VerifiableCredential} [credential] - The credential for which to allocate revocation status.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to new credential with revocation status.
+   */
   async allocateRevocationStatus(credential: VerifiableCredential): Promise<VerifiableCredential> {
     return this.allocateStatus({ credential, statusPurposes: [StatusPurpose.Revocation] });
   }
 
-  // allocates suspension status for credential
+  /**
+   * Allocates suspension status for credential
+   * 
+   * @param {VerifiableCredential} [credential] - The credential for which to allocate suspension status.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to new credential with suspension status.
+   */
   async allocateSuspensionStatus(credential: VerifiableCredential): Promise<VerifiableCredential> {
     return this.allocateStatus({ credential, statusPurposes: [StatusPurpose.Suspension] });
   }
 
-  // allocates all supported statuses
+  /**
+   * Allocates all supported statuses for credential
+   * 
+   * @param {VerifiableCredential} [credential] - The credential for which to allocate all supported statuses.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to new credential with all supported statuses.
+   */
   async allocateSupportedStatuses(credential: VerifiableCredential): Promise<VerifiableCredential> {
     return this.allocateStatus({ credential, statusPurposes: SUPPORTED_STATUS_PURPOSES });
   }
 
-  // updates status of credential
+  /**
+   * Updates status for credential
+   *
+   * @param {UpdateStatusOptions} [options={}] - The options to use.
+   * 
+   * @param {string} [options.credentialId] - The ID of the credential for which to update status.
+   * @param {StatusPurpose} [options.statusPurpose] - The status to update for the credential.
+   * @param {boolean} [options.invalidate] - Whether to invalidate the status of the credential for the given purpose.
+   *
+   * @throws {BadRequestError} If the credential is not being tracked for the given purpose
+   *   or if the status credential is in JWT format.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to updated status credential.
+   */
   async updateStatus({
     credentialId, statusPurpose, invalidate
   }: UpdateStatusOptions): Promise<VerifiableCredential> {
@@ -721,7 +803,13 @@ export abstract class BaseCredentialStatusManager {
     });
   }
 
-  // determines if credential status info should be updated
+  /**
+   * Determines if credential status info should be updated
+   * 
+   * @param {ShouldUpdateCredentialStatusInfoOptions} [options] - Credential status update determination options.
+   *
+   * @returns {boolean} Returns whether credential status info should be updated.
+   */
   shouldUpdateCredentialStatusInfo({
     statusInfo, statusPurpose, invalidate
   }: ShouldUpdateCredentialStatusInfoOptions): boolean {
@@ -740,7 +828,13 @@ export abstract class BaseCredentialStatusManager {
     return valid === invalidate;
   }
 
-  // revokes credential
+  /**
+   * Revokes credential
+   * 
+   * @param {string} [credentialId] - The ID of the credential to revoke.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to updated status credential.
+   */
   async revokeCredential(credentialId: string): Promise<VerifiableCredential> {
     return this.updateStatus({
       credentialId,
@@ -749,7 +843,13 @@ export abstract class BaseCredentialStatusManager {
     });
   }
 
-  // suspends credential
+  /**
+   * Suspends credential
+   * 
+   * @param {string} [credentialId] - The ID of the credential to suspend.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to updated status credential.
+   */
   async suspendCredential(credentialId: string): Promise<VerifiableCredential> {
     return this.updateStatus({
       credentialId,
@@ -758,7 +858,13 @@ export abstract class BaseCredentialStatusManager {
     });
   }
 
-  // lifts suspension from credential
+  /**
+   * Lifts suspension from credential
+   * 
+   * @param {string} [credentialId] - The ID of the credential for which to lift suspension.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to updated status credential.
+   */
   async unsuspendCredential(credentialId: string): Promise<VerifiableCredential> {
     return this.updateStatus({
       credentialId,
@@ -767,29 +873,75 @@ export abstract class BaseCredentialStatusManager {
     });
   }
 
-  // retrieves status of credential with given ID
+  /**
+   * Retrieves status of credential with given ID
+   *
+   * @param {string} [credentialId] - The ID of the credential for which to retrieve status.
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<CredentialStatusInfo>} Resolves to credential status info.
+   */
   async getStatus(credentialId: string, options?: DatabaseConnectionOptions): Promise<CredentialStatusInfo> {
     // retrieve user credential record
     const record = await this.getUserCredentialRecordById(credentialId, options);
     return record.statusInfo;
   }
 
-  // retrieves database URL
+  /**
+   * Retrieves database URL
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<string>} Resolves to database URL.
+   */
   abstract getDatabaseUrl(options?: DatabaseConnectionOptions): Promise<string>;
 
-  // executes function as transaction
+  /**
+   * Executes function as transaction
+   * 
+   * @param {ExecuteTransactionFunction} [func] - Function to execute as transaction.
+   *   This function accepts database connection options.
+   *
+   * @returns {Promise<any>} Resolves to the return value and performs the side effects of func.
+   */
   abstract executeTransaction(func: (options?: DatabaseConnectionOptions) => Promise<any>): Promise<any>;
 
-  // checks if caller has authority to manage status based on authorization credentials
+  /**
+   * Determines if caller has authority to manage status based on authorization credentials
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<boolean>} Resolves to whether caller has the authority
+   *   to manage status, based on database connection options.
+   */
   abstract hasAuthority(options?: DatabaseConnectionOptions): Promise<boolean>;
 
-  // creates database
+  /**
+   * Creates database
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   abstract createDatabase(options?: DatabaseConnectionOptions): Promise<void>;
 
-  // creates database table
+  /**
+   * Creates database
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   abstract createDatabaseTable(tableName: string, options?: DatabaseConnectionOptions): Promise<void>;
 
-  // creates database tables
+  /**
+   * Creates database tables
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async createDatabaseTables(options?: DatabaseConnectionOptions): Promise<void> {
     const tableNames = this.getDatabaseTableNames();
     for (const tableName of tableNames) {
@@ -803,7 +955,13 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates database resources
+  /**
+   * Creates database resources
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async createDatabaseResources(options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createDatabase(options);
@@ -815,7 +973,13 @@ export abstract class BaseCredentialStatusManager {
     await this.createDatabaseTables(options);
   }
 
-  // initializes database resources
+  /**
+   * Initializes database resources
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async initializeDatabaseResources(options?: DatabaseConnectionOptions): Promise<void> {
     // retrieve signing material
     const {
@@ -875,13 +1039,32 @@ export abstract class BaseCredentialStatusManager {
     await this.createConfigRecord(configRecord, options);
   }
 
-  // checks if database exists
+  /**
+   * Determines if database exists
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<boolean>} Resolves to whether database exists.
+   */
   abstract databaseExists(options?: DatabaseConnectionOptions): Promise<boolean>;
 
-  // checks if database table exists
+  /**
+   * Determines if database table exists
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<boolean>} Resolves to whether database table exists.
+   */
   abstract databaseTableExists(tableName: string, options?: DatabaseConnectionOptions): Promise<boolean>;
 
-  // checks if database tables exist
+  /**
+   * Determines if database tables exist
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<boolean>} Resolves to whether database tables exist.
+   */
   async databaseTablesExist(options?: DatabaseConnectionOptions): Promise<boolean> {
     const tableNames = this.getDatabaseTableNames();
     const config = await this.getConfigRecord(options);
@@ -911,10 +1094,23 @@ export abstract class BaseCredentialStatusManager {
     return true;
   }
 
-  // checks if database table is empty
+  /**
+   * Determines if database table is empty
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<boolean>} Resolves to whether database table is empty.
+   */
   abstract databaseTableEmpty(tableName: string, options?: DatabaseConnectionOptions): Promise<boolean>;
 
-  // checks if database tables are empty
+  /**
+   * Determines if database tables are empty
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<boolean>} Resolves to whether database tables are empty.
+   */
   async databaseTablesEmpty(options?: DatabaseConnectionOptions): Promise<boolean> {
     const tableNames = this.getDatabaseTableNames();
     const config = await this.getConfigRecord(options);
@@ -943,7 +1139,13 @@ export abstract class BaseCredentialStatusManager {
     return true;
   }
 
-  // retrieves database state
+  /**
+   * Retrieves database state
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<GetDatabaseStateResult>} Resolves to database state.
+   */
   async getDatabaseState(options?: DatabaseConnectionOptions): Promise<GetDatabaseStateResult> {
     try {
       // retrieve config
@@ -1085,10 +1287,25 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates single database record
+  /**
+   * Creates single database record
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {T} [record] - Database record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   abstract createRecord<T>(tableName: string, record: T, options?: DatabaseConnectionOptions): Promise<void>;
 
-  // creates status credential record
+  /**
+   * Creates status credential record
+   * 
+   * @param {StatusCredentialRecord} [statusCredentialRecord] - Status credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async createStatusCredentialRecord(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.statusCredentialTableName, statusCredentialRecord, options);
@@ -1099,7 +1316,14 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates user credential record
+  /**
+   * Creates user credential record
+   * 
+   * @param {UserCredentialRecord} [userCredentialRecord] - User credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async createUserCredentialRecord(userCredentialRecord: UserCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.userCredentialTableName, userCredentialRecord, options);
@@ -1110,7 +1334,14 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates config record
+  /**
+   * Creates config record
+   * 
+   * @param {ConfigRecord} [configRecord] - Config record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async createConfigRecord(configRecord: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.configTableName, configRecord, options);
@@ -1121,7 +1352,14 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates event record
+  /**
+   * Creates event record
+   * 
+   * @param {EventRecord} [eventRecord] - Event record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async createEventRecord(eventRecord: EventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.eventTableName, eventRecord, options);
@@ -1132,7 +1370,14 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // creates credential event record
+  /**
+   * Creates credential event record
+   * 
+   * @param {CredentialEventRecord} [credentialEventRecord] - Credential event record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async createCredentialEventRecord(credentialEventRecord: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       await this.createRecord(this.credentialEventTableName, credentialEventRecord, options);
@@ -1143,10 +1388,27 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // updates single database record
+  /**
+   * Updates single database record
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {string} [recordIdKey] - Name of record ID key.
+   * @param {string} [recordIdValue] - Value associated with recordIdKey.
+   * @param {T} [record] - Database record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   abstract updateRecord<T>(tableName: string, recordIdKey: string, recordIdValue: string, record: T, options?: DatabaseConnectionOptions): Promise<void>;
 
-  // updates status credential record
+  /**
+   * Updates status credential record
+   * 
+   * @param {StatusCredentialRecord} [statusCredentialRecord] - Status credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async updateStatusCredentialRecord(statusCredentialRecord: StatusCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { id } = statusCredentialRecord;
@@ -1161,7 +1423,14 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // updates user credential record
+  /**
+   * Updates user credential record
+   * 
+   * @param {UserCredentialRecord} [userCredentialRecord] - User credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async updateUserCredentialRecord(userCredentialRecord: UserCredentialRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { id } = userCredentialRecord;
@@ -1176,7 +1445,14 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // updates config record
+  /**
+   * Updates config record
+   * 
+   * @param {ConfigRecord} [configRecord] - Config record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async updateConfigRecord(configRecord: ConfigRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { id } = configRecord;
@@ -1191,7 +1467,14 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // updates credential event record
+  /**
+   * Updates credential event record
+   * 
+   * @param {CredentialEventRecord} [credentialEventRecord] - Credential event record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
   async updateCredentialEventRecord(credentialEventRecord: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
     try {
       const { credentialId } = credentialEventRecord;
@@ -1206,10 +1489,23 @@ export abstract class BaseCredentialStatusManager {
     }
   }
 
-  // retrieves any database record
+  /**
+   * Retrieves any database record in table
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<T | null>} Resolves to database record in table, if any exist.
+   */
   abstract getAnyRecord<T>(tableName: string, options?: DatabaseConnectionOptions): Promise<T | null>;
 
-  // retrieves config ID
+  /**
+   * Retrieves config record ID
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<string>} Resolves to config record ID.
+   */
   async getConfigId(options?: DatabaseConnectionOptions): Promise<string> {
     let record;
     try {
@@ -1230,15 +1526,39 @@ export abstract class BaseCredentialStatusManager {
     return (record as ConfigRecord).id;
   }
 
-  // retrieves single database record by field
+  /**
+   * Retrieves single database record by field
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {string} [fieldKey] - Name of field key.
+   * @param {string} [fieldValue] - Value associated with fieldKey.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<T | null>} Resolves to matching database record in table, if any exist.
+   */
   abstract getRecordByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: DatabaseConnectionOptions): Promise<T | null>;
 
-  // retrieves single database record by id
+  /**
+   * Retrieves single database record by id
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {string} [id] - ID of database record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<T | null>} Resolves to matching database record in table, if any exist.
+   */
   async getRecordById<T>(tableName: string, id: string, options?: DatabaseConnectionOptions): Promise<T | null> {
     return this.getRecordByField(tableName, 'id', id, options);
   }
 
-  // retrieves status credential record by ID
+  /**
+   * Retrieves status credential record by ID
+   * 
+   * @param {string} [statusCredentialId] - ID of status credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<StatusCredentialRecord>} Resolves to status credential record.
+   */
   async getStatusCredentialRecordById(statusCredentialId: string, options?: DatabaseConnectionOptions): Promise<StatusCredentialRecord> {
     let record;
     try {
@@ -1259,13 +1579,27 @@ export abstract class BaseCredentialStatusManager {
     return record as StatusCredentialRecord;
   }
 
-  // retrieves status credential by ID
+  /**
+   * Retrieves status credential by ID
+   * 
+   * @param {string} [statusCredentialId] - ID of status credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<VerifiableCredential>} Resolves to status credential.
+   */
   async getStatusCredential(statusCredentialId: string, options?: DatabaseConnectionOptions): Promise<VerifiableCredential> {
     const { credential } = await this.getStatusCredentialRecordById(statusCredentialId, options);
     return credential;
   }
 
-  // retrieves user credential record by ID
+  /**
+   * Retrieves user credential record by ID
+   * 
+   * @param {string} [userCredentialId] - ID of user credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<UserCredentialRecord>} Resolves to user credential record.
+   */
   async getUserCredentialRecordById(userCredentialId: string, options?: DatabaseConnectionOptions): Promise<UserCredentialRecord> {
     let record;
     try {
@@ -1286,12 +1620,25 @@ export abstract class BaseCredentialStatusManager {
     return record as UserCredentialRecord;
   }
 
-  // alias for getUserCredentialRecordById
+  /**
+   * Alias for getUserCredentialRecordById
+   * 
+   * @param {string} [userCredentialId] - ID of user credential record.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<UserCredentialRecord>} Resolves to user credential record.
+   */
   async getCredentialInfo(userCredentialId: string, options?: DatabaseConnectionOptions): Promise<UserCredentialRecord> {
     return this.getUserCredentialRecordById(userCredentialId, options);
   }
 
-  // retrieves config record by ID
+  /**
+   * Retrieves config record
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<ConfigRecord>} Resolves to config record.
+   */
   async getConfigRecord(options?: DatabaseConnectionOptions): Promise<ConfigRecord> {
     let configId;
     let record;
@@ -1314,23 +1661,59 @@ export abstract class BaseCredentialStatusManager {
     return record as ConfigRecord;
   }
 
-  // retrieves all database records
+  /**
+   * Retrieves all database records
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<T[]>} Resolves to all records in database table.
+   */
   abstract getAllRecords<T>(tableName: string, options?: DatabaseConnectionOptions): Promise<T[]>;
 
-  // retrieves all user credential records
+  /**
+   * Retrieves all user credential records
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<UserCredentialRecord[]>} Resolves to all records in database table.
+   */
   async getAllUserCredentialRecords(options?: DatabaseConnectionOptions): Promise<UserCredentialRecord[]> {
     return this.getAllRecords(this.userCredentialTableName, options);
   }
 
-  // retrieves all database records by field
+  /**
+   * Retrieves all database records by field
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {string} [fieldKey] - Name of field key.
+   * @param {string} [fieldValue] - Value associated with fieldKey.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<T[]>} Resolves to all matching records.
+   */
   abstract getAllRecordsByField<T>(tableName: string, fieldKey: string, fieldValue: string, options?: DatabaseConnectionOptions): Promise<T[]>;
 
-  // retrieves all status credential records by purpose
+  /**
+   * Retrieves all status credential records by purpose
+   * 
+   * @param {StatusPurpose} [purpose] - Status purpose.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<StatusCredentialRecord[]>} Resolves to all matching status credential records.
+   */
   async getAllStatusCredentialRecordsByPurpose(purpose: StatusPurpose, options?: DatabaseConnectionOptions): Promise<StatusCredentialRecord[]> {
     return this.getAllRecordsByField(this.statusCredentialTableName, 'purpose', purpose, options);
   }
 
-  // retrieves all status credentials by purpose
+  /**
+   * Retrieves all status credentials by purpose
+   * 
+   * @param {StatusPurpose} [purpose] - Status purpose.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<VerifiableCredential[]>} Resolves to all matching status credentials.
+   */
   async getAllStatusCredentialsByPurpose(purpose: StatusPurpose, options?: DatabaseConnectionOptions): Promise<VerifiableCredential[]> {
     let statusCredentials = [];
     try {
@@ -1346,7 +1729,13 @@ export abstract class BaseCredentialStatusManager {
     return statusCredentials;
   }
 
-  // retrieves all user credential IDs
+  /**
+   * Retrieves all user credential IDs
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<string[]>} Resolves to all user credential IDs.
+   */
   async getAllUserCredentialIds(options?: DatabaseConnectionOptions): Promise<string[]> {
     let credentialIds = [];
     try {
@@ -1361,7 +1750,13 @@ export abstract class BaseCredentialStatusManager {
   }
 }
 
-// composes BitstringStatusListCredential
+/**
+ * Composes BitstringStatusListCredential
+ * 
+ * @param {ComposeStatusCredentialOptions} [options] - Status credential composition options.
+ *
+ * @returns {Promise<VerifiableCredential>} Resolves to status credential.
+ */
 export async function composeStatusCredential({
   issuerDid,
   credentialId,
