@@ -167,9 +167,6 @@ export interface DatabaseConnectionOptions {
   [x: string]: any;
 }
 
-// Type definition for executeTransaction method input
-type ExecuteTransactionFunction = (options?: DatabaseConnectionOptions) => Promise<any>;
-
 // Type definition for BaseCredentialStatusManager constructor method input
 export interface BaseCredentialStatusManagerOptions {
   statusCredentialSiteOrigin: string;
@@ -900,7 +897,7 @@ export abstract class BaseCredentialStatusManager {
   /**
    * Executes function as transaction
    * 
-   * @param {ExecuteTransactionFunction} [func] - Function to execute as transaction.
+   * @param {Function} [func] - Function to execute as transaction.
    *   This function accepts database connection options.
    *
    * @returns {Promise<any>} Resolves to the return value and performs the side effects of func.
