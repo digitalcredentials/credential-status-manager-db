@@ -322,8 +322,8 @@ export abstract class BaseCredentialStatusManager {
 
   /**
    * Generates new status credential ID
-   *   Note: We assume this method will never generate an ID that
-   *   has previously been generated for a status credential in this system
+   * Note: We assume this method will never generate an ID that
+   * has previously been generated for a status credential in this system
    * 
    * @returns {string} Returns new status credential ID.
    */
@@ -333,8 +333,8 @@ export abstract class BaseCredentialStatusManager {
 
   /**
    * Generates new user credential ID
-   *   Note: We assume this method will never generate an ID that
-   *   has previously been generated for a user credential in this system
+   * Note: We assume this method will never generate an ID that
+   * has previously been generated for a user credential in this system
    * 
    * @returns {string} Returns new user credential ID.
    */
@@ -390,7 +390,7 @@ export abstract class BaseCredentialStatusManager {
       // conflicts with an ID that has already been tracked in the event log
       credentialCopy.id = this.generateUserCredentialId();
     } else {
-      if(!isValidCredentialId(credentialCopy.id)) {
+      if (!isValidCredentialId(credentialCopy.id)) {
         throw new BadRequestError({
           message: 'The ID must be a URL, UUID, or DID ' +
             `that is no more than ${MAX_ID_LENGTH} characters in length.`
@@ -440,8 +440,8 @@ export abstract class BaseCredentialStatusManager {
           newStatusCredential,
           newUserCredential: false,
           credentialStatusInfo: statusInfo,
-          statusCredentialInfo,
           credentialsIssuedCounter,
+          statusCredentialInfo,
           ...configRecordRest
         };
       }
@@ -492,8 +492,8 @@ export abstract class BaseCredentialStatusManager {
       newStatusCredential,
       newUserCredential: true,
       credentialStatusInfo: statusInfo,
-      statusCredentialInfo,
       credentialsIssuedCounter,
+      statusCredentialInfo,
       ...configRecordRest
     };
   }
@@ -666,6 +666,31 @@ export abstract class BaseCredentialStatusManager {
   }
 
   /**
+   * Determines if credential status info should be updated
+   *
+   * @param {ShouldUpdateCredentialStatusInfoOptions} [options] - Credential status update determination options.
+   *
+   * @returns {boolean} Returns whether credential status info should be updated.
+   */
+  shouldUpdateCredentialStatusInfo({
+    statusInfo, statusPurpose, invalidate
+  }: ShouldUpdateCredentialStatusInfoOptions): boolean {
+    // prevent activation of credentials that have been revoked
+    const revoked = !statusInfo[StatusPurpose.Revocation].valid;
+    if (revoked && !(statusPurpose === StatusPurpose.Revocation && invalidate)) {
+      throw new BadRequestError({
+        message:
+          `This credential cannot be activated for any purpose, since it has been revoked.`
+      });
+    }
+
+    // determine if the status action would lead to a change in state
+    const invokedStatusInfo = statusInfo[statusPurpose];
+    const { valid } = invokedStatusInfo;
+    return valid === invalidate;
+  }
+
+  /**
    * Updates status for credential
    *
    * @param {UpdateStatusOptions} [options={}] - The options to use.
@@ -680,14 +705,16 @@ export abstract class BaseCredentialStatusManager {
    * @returns {Promise<VerifiableCredential>} Resolves to updated status credential.
    */
   async updateStatus({
-    credentialId, statusPurpose, invalidate
+    credentialId,
+    statusPurpose,
+    invalidate
   }: UpdateStatusOptions): Promise<VerifiableCredential> {
     return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // retrieve record for credential with given ID
-      const oldCredentialRecord = await this.getUserCredentialRecordById(credentialId, options);
+      const credentialRecordBefore = await this.getUserCredentialRecordById(credentialId, options);
 
       // retrieve relevant credential info
-      const { statusInfo, ...oldCredentialRecordRest } = oldCredentialRecord;
+      const { statusInfo, ...credentialRecordBeforeRest } = credentialRecordBefore;
 
       // report error when caller attempts to allocate for an unavailable purpose
       const availablePurposes = Object.keys(statusInfo) as StatusPurpose[];
@@ -769,7 +796,7 @@ export abstract class BaseCredentialStatusManager {
       }, options);
 
       // update user credential record
-      const newCredentialRecord: UserCredentialRecord = {
+      const credentialRecordAfter: UserCredentialRecord = {
         statusInfo: {
           ...statusInfo,
           [statusPurpose]: {
@@ -777,9 +804,9 @@ export abstract class BaseCredentialStatusManager {
             valid: !valid
           }
         },
-        ...oldCredentialRecordRest
+        ...credentialRecordBeforeRest
       };
-      await this.updateUserCredentialRecord(newCredentialRecord, options);
+      await this.updateUserCredentialRecord(credentialRecordAfter, options);
 
       // create new event record
       const eventId = uuid();
@@ -798,31 +825,6 @@ export abstract class BaseCredentialStatusManager {
 
       return statusCredential;
     });
-  }
-
-  /**
-   * Determines if credential status info should be updated
-   * 
-   * @param {ShouldUpdateCredentialStatusInfoOptions} [options] - Credential status update determination options.
-   *
-   * @returns {boolean} Returns whether credential status info should be updated.
-   */
-  shouldUpdateCredentialStatusInfo({
-    statusInfo, statusPurpose, invalidate
-  }: ShouldUpdateCredentialStatusInfoOptions): boolean {
-    // prevent activation of credentials that have been revoked
-    const revoked = !statusInfo[StatusPurpose.Revocation].valid;
-    if (revoked && statusPurpose !== StatusPurpose.Revocation && !invalidate) {
-      throw new BadRequestError({
-        message:
-          `This credential cannot be activated for any purpose, since it has been revoked.`
-      });
-    }
-
-    // determine if the status action would lead to a change in state
-    const invokedStatusInfo = statusInfo[statusPurpose];
-    const { valid } = invokedStatusInfo;
-    return valid === invalidate;
   }
 
   /**
@@ -1168,14 +1170,19 @@ export abstract class BaseCredentialStatusManager {
 
       // examine info for all status purposes
       const statusPurposes = Object.keys(statusCredentialInfo) as StatusPurpose[];
-      const statusPurposesCounter = statusPurposes.length;
-      let credsIssuedCounter = 0;
+      // Note: This is the number of credentials that would be issued if
+      // every credential is assigned to every status purpose, but it is
+      // possible to assign a credential to fewer purposes than the total
+      // number of supported purposes in a given deployment
+      let maxCredentialsIssuedCounter = 0;
       for (const statusPurpose of statusPurposes) {
+        // retrieve info for latest status credential
         const {
           latestStatusCredentialId,
           latestCredentialsIssuedCounter,
           statusCredentialsCounter
         } = statusCredentialInfo[statusPurpose];
+        const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
 
         // ensure that status is consistent
         const statusCredentials = await this.getAllStatusCredentialsByPurpose(statusPurpose, options);
@@ -1196,7 +1203,6 @@ export abstract class BaseCredentialStatusManager {
           // ensure that status credential is well formed
           const statusCredentialSubjectObject = getCredentialSubjectObject(statusCredential);
           const statusPurpose = statusCredentialSubjectObject.statusPurpose as StatusPurpose;
-          const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
           hasLatestStatusCredentialId = hasLatestStatusCredentialId || (statusCredential.id?.endsWith(latestStatusCredentialId) ?? false);
           const hasValidStatusCredentialType = statusCredential.type.includes(STATUS_CREDENTIAL_TYPE);
           const hasValidStatusCredentialSubId = statusCredentialSubjectObject.id?.startsWith(statusCredentialUrl) ?? false;
@@ -1210,6 +1216,8 @@ export abstract class BaseCredentialStatusManager {
             invalidStatusCredentialIds.push(statusCredential.id);
           }
         }
+
+        // ensure that all status credentials for this purpose are valid
         if (invalidStatusCredentialIds.length !== 0) {
           return {
             valid: false,
@@ -1221,33 +1229,31 @@ export abstract class BaseCredentialStatusManager {
           };
         }
 
-        // ensure that latest status credential is being tracked in the config
+        // ensure that latest status credential for this purpose is being tracked in the config
         if (!hasLatestStatusCredentialId) {
           return {
             valid: false,
             error: new InvalidDatabaseStateError({
-              message: `Latest status credential ("${latestStatusCredentialId}") ` +
-                'is not being tracked in config.'
+              message: `Latest status credential for the ${statusPurpose} purpose ` +
+                `("${latestStatusCredentialId}") is not being tracked in the config.`
             })
           };
         }
 
         // accumulate credential issuance counter from all status purposes
-        credsIssuedCounter += (statusCredentialsCounter - 1) *
-                               CREDENTIAL_STATUS_LIST_SIZE +
-                               latestCredentialsIssuedCounter;
+        maxCredentialsIssuedCounter += (statusCredentialsCounter - 1) *
+                                       CREDENTIAL_STATUS_LIST_SIZE +
+                                       latestCredentialsIssuedCounter;
       }
 
       // retrieve credential IDs from event log
       const credentialIds = await this.getAllUserCredentialIds(options);
       const credentialIdsCounter = credentialIds.length;
       const hasValidIssuedCounterCredentialToConfig = credentialIdsCounter === credentialsIssuedCounter;
-      const hasValidIssuedCounterConfigToReality =
-        credentialsIssuedCounter <= credsIssuedCounter &&
-        credsIssuedCounter <= credentialsIssuedCounter * statusPurposesCounter;
+      const hasValidIssuedCounterConfigToMax = credentialsIssuedCounter <= maxCredentialsIssuedCounter;
 
-      // check if credential issuance counter matches between
-      // credential table and config table
+      // ensure alignment between the number of records in the credential table
+      // and the number of credentials tracked in the config table
       if (!hasValidIssuedCounterCredentialToConfig) {
         return {
           valid: false,
@@ -1260,16 +1266,16 @@ export abstract class BaseCredentialStatusManager {
         };
       }
 
-      // check if credential issuance counter matches between
-      // config table and reality
-      if (!hasValidIssuedCounterConfigToReality) {
+      // ensure that the number of credentials does not exceed the max
+      // number of credentials that can be issued in this deployment
+      if (!hasValidIssuedCounterConfigToMax) {
         return {
           valid: false,
           error: new InvalidDatabaseStateError({
-            message: 'There is a mismatch between the credentials tracked ' +
-              `in the config table (${credentialsIssuedCounter}) ` +
-              'and the credentials tracked ' +
-              `in reality (${credsIssuedCounter}).`
+            message: 'The number of credentials tracked ' +
+              `in the config (${credentialsIssuedCounter}) ` +
+              'exceeds the max number of credentials that could have ' +
+              `been issued in this deployment (${maxCredentialsIssuedCounter}).`
           })
         };
       }
