@@ -45,7 +45,6 @@ export const databasePassword = 'testpass';
 export const statusCredentialSiteOrigin = 'https://credentials.example.edu/status';
 export const didMethod = 'key' as DidMethod;
 export const didSeed = 'DsnrHBHFQP0ab59dQELh3uEwy7i5ArcOTwxkwRO2hM87CBRGWBEChPO7AjmwkAZ2';
-export const statusCredentialId = 'V27UAUYPNR';
 
 export function checkLocalCredentialStatus(
   credentialWithStatus: any,

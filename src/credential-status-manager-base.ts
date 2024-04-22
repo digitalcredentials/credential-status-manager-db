@@ -103,7 +103,7 @@ export interface CredentialEventRecord {
 export interface ConfigRecord {
   id: string;
   statusCredentialSiteOrigin: string;
-  statusCredentialInfo: StatusCredentialInfo
+  statusCredentialInfo: StatusCredentialInfo;
   credentialsIssuedCounter: number;
 }
 
@@ -537,9 +537,7 @@ export abstract class BaseCredentialStatusManager {
         signStatusCredential,
         signUserCredential
       } = this;
-      const {
-        issuerDid
-      } = await getSigningMaterial({
+      const { issuerDid } = await getSigningMaterial({
         didMethod,
         didSeed,
         didWebUrl
@@ -755,9 +753,7 @@ export abstract class BaseCredentialStatusManager {
         didWebUrl,
         signStatusCredential
       } = this;
-      const {
-        issuerDid
-      } = await getSigningMaterial({
+      const { issuerDid } = await getSigningMaterial({
         didMethod,
         didSeed,
         didWebUrl
@@ -1229,7 +1225,7 @@ export abstract class BaseCredentialStatusManager {
           };
         }
 
-        // ensure that latest status credential for this purpose is being tracked in the config
+        // ensure that the latest status credential for this purpose is being tracked in the config
         if (!hasLatestStatusCredentialId) {
           return {
             valid: false,
