@@ -14,7 +14,7 @@ import {
 } from './errors.js';
 import {
   DidMethod,
-  MAX_ID_LENGTH,
+  MAX_CREDENTIAL_ID_LENGTH,
   getCredentialSubjectObject,
   getDateString,
   getSigningMaterial,
@@ -25,6 +25,12 @@ import {
 
 // Number of credentials tracked in a list
 const CREDENTIAL_STATUS_LIST_SIZE = 100000;
+
+// Length of status credential ID
+const STATUS_CREDENTIAL_ID_LENGTH = 20;
+
+// Character set of status credential ID
+const STATUS_CREDENTIAL_ID_CHAR_SET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
 // Status credential type
 const STATUS_CREDENTIAL_TYPE = 'BitstringStatusListCredential';
@@ -328,7 +334,12 @@ export abstract class BaseCredentialStatusManager {
    * @returns {string} Returns new status credential ID.
    */
   generateStatusCredentialId(): string {
-    return Math.random().toString(36).substring(2, 12).toUpperCase();
+    let statusCredentialId = '';
+    const charSetLength = STATUS_CREDENTIAL_ID_CHAR_SET.length;
+    for (let i = 0; i < STATUS_CREDENTIAL_ID_LENGTH; i++) {
+      statusCredentialId += STATUS_CREDENTIAL_ID_CHAR_SET.charAt(Math.floor(Math.random() * charSetLength));
+    }
+    return statusCredentialId;
   }
 
   /**
@@ -392,8 +403,8 @@ export abstract class BaseCredentialStatusManager {
     } else {
       if (!isValidCredentialId(credentialCopy.id)) {
         throw new BadRequestError({
-          message: 'The ID must be a URL, UUID, or DID ' +
-            `that is no more than ${MAX_ID_LENGTH} characters in length.`
+          message: 'The credential ID must be a URL, UUID, or DID ' +
+            `that is no more than ${MAX_CREDENTIAL_ID_LENGTH} characters in length.`
         });
       }
     }
