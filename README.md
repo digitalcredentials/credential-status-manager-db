@@ -3,7 +3,7 @@
 [![Build status](https://img.shields.io/github/actions/workflow/status/digitalcredentials/credential-status-manager-db/main.yml?branch=main)](https://github.com/digitalcredentials/credential-status-manager-db/actions?query=workflow%3A%22Node.js+CI%22)
 [![NPM Version](https://img.shields.io/npm/v/@digitalcredentials/credential-status-manager-db.svg)](https://npm.im/@digitalcredentials/credential-status-manager-db)
 
-> A Typescript library for managing the status of [Verifiable Credentials](https://www.w3.org/TR/vc-data-model) in a database using [Bitstring Status List](https://www.w3.org/TR/vc-bitstring-status-list)
+> A Typescript library for managing the status of [Verifiable Credentials](https://www.w3.org/TR/vc-data-model-2.0) in a database using [Bitstring Status List](https://www.w3.org/TR/vc-bitstring-status-list)
 
 ## Table of Contents
 
@@ -39,7 +39,7 @@ Credentials are dynamic artifacts with a lifecycle that goes well beyond issuanc
 
 To install via NPM:
 
-```
+```bash
 npm install @digitalcredentials/credential-status-manager-db
 ```
 
@@ -47,7 +47,7 @@ npm install @digitalcredentials/credential-status-manager-db
 
 To install locally (for development):
 
-```
+```bash
 git clone https://github.com/digitalcredentials/credential-status-manager-db.git
 cd credential-status-manager-db
 npm install
