@@ -1,7 +1,7 @@
 /*!
  * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
-import { createCredential, createList, decodeList } from '@digitalcredentials/vc-bitstring-status-list';
+import { createCredential, createList, decodeList } from '@digitalbazaar/vc-bitstring-status-list';
 import { VerifiableCredential } from '@digitalcredentials/vc-data-model';
 import { v4 as uuid } from 'uuid';
 import {

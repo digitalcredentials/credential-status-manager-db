@@ -2,19 +2,17 @@
  * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
 import * as uuid from 'uuid';
-import * as vc1Context from 'credentials-context';
-import * as vc2Context from '@digitalbazaar/credentials-v2-context';
 import * as vcBitstringStatusListContext from '@digitalbazaar/vc-bitstring-status-list-context';
-import { decodeSecretKeySeed } from '@digitalcredentials/bnid';
-import { Ed25519Signature2020 } from '@digitalcredentials/ed25519-signature-2020';
-import { Ed25519VerificationKey2020 } from '@digitalcredentials/ed25519-verification-key-2020';
-import { X25519KeyAgreementKey2020 } from '@digitalcredentials/x25519-key-agreement-key-2020';
+import { decodeSecretKeySeed } from 'bnid';
+import { Ed25519Signature2020 } from '@digitalbazaar/ed25519-signature-2020';
+import { Ed25519VerificationKey2020 } from '@digitalbazaar/ed25519-verification-key-2020';
+import { X25519KeyAgreementKey2020 } from '@digitalbazaar/x25519-key-agreement-key-2020';
 import { securityLoader } from '@digitalcredentials/security-document-loader';
-import { issue as sign } from '@digitalcredentials/vc';
+import { issue as sign } from '@digitalbazaar/vc';
 import { VerifiableCredential } from '@digitalcredentials/vc-data-model';
-import * as DidKey from '@digitalcredentials/did-method-key';
+import * as DidKey from '@digitalbazaar/did-method-key';
 import * as DidWeb from '@interop/did-web-resolver';
-import { CryptoLD } from '@digitalcredentials/crypto-ld';
+import { CryptoLD } from 'crypto-ld';
 import { BadRequestError, InvalidDidSeedError } from './errors.js';
 
 // Crypto library for linked data
@@ -25,6 +23,10 @@ cryptoLd.use(X25519KeyAgreementKey2020);
 // DID drivers
 const didWebDriver = DidWeb.driver({ cryptoLd });
 const didKeyDriver = DidKey.driver();
+didKeyDriver.use({
+  multibaseMultikeyHeader: 'z6Mk',
+  fromMultibase: Ed25519VerificationKey2020.from
+});
 
 // Document loader
 const documentLoader = securityLoader().build();
@@ -32,6 +34,8 @@ const documentLoader = securityLoader().build();
 // Max length for credential IDs
 export const MAX_CREDENTIAL_ID_LENGTH = 64;
 
+const vc1ContextId = 'https://www.w3.org/2018/credentials/v1'
+const vc2ContextId = 'https://www.w3.org/ns/credentials/v2'
 // DID method used to sign credentials
 export enum DidMethod {
   Key = 'key',
@@ -77,13 +81,13 @@ export function validateCredential(credential: VerifiableCredential): void {
   }
 
   switch (credential['@context'][0]) {
-    case vc1Context.CONTEXT_URL:
+    case vc1ContextId:
       // ensure that credential contains valid status credential context in VC 1.1
       if (!credential['@context'].includes(vcBitstringStatusListContext.CONTEXT_URL)) {
         credential['@context'].push(vcBitstringStatusListContext.CONTEXT_URL);
       }
       break;
-    case vc2Context.CONTEXT_URL:
+    case vc2ContextId:
       // no additional contexts need to be added in VC 2.0
       break;
     default:
@@ -91,7 +95,7 @@ export function validateCredential(credential: VerifiableCredential): void {
         message: 'This library does not support credentials ' +
           'that do not conform to VC 1.1 or VC 2.0. ' +
           'Note: The first value in the "@context" array must be ' +
-          `${vc1Context.CONTEXT_URL} or ${vc2Context.CONTEXT_URL}.`
+          `${vc1ContextId} or ${vc2ContextId}.`
       });
   }
 }
@@ -147,10 +151,13 @@ export async function getSigningMaterial({
   const didSeedBytes = decodeSeed(didSeed);
   switch (didMethod) {
     case DidMethod.Key:
-      ({ didDocument, keyPairs } = await didKeyDriver.generate({
+      const verificationKeyPair = await Ed25519VerificationKey2020.generate({
         seed: didSeedBytes
+    });
+    ({ didDocument, keyPairs } = await didKeyDriver.fromKeyPair({
+        verificationKeyPair
       }));
-      break;
+    break;
     case DidMethod.Web:
       ({ didDocument, keyPairs } = await didWebDriver.generate({
         seed: didSeedBytes,
