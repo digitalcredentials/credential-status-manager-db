@@ -2,8 +2,8 @@
   "compilerOptions": {
     "strict": true,
     "target": "es2022",
-    "lib": ["es2022", "dom"],
-    "module": "commonjs",
+    "lib": ["es2022"],
+    "module": "es2022",
     "moduleResolution": "node",
     "outDir": "dist",
     "noImplicitAny": true,
@@ -20,9 +20,7 @@
   "include": [
     "src/**/*",
     ".eslintrc.js",
-    "karma.conf.js",
-    "pre-test.js",
-    "post-test.js"
+    "karma.conf.js"
   ],
   "exclude": ["node_modules", "dist", "test"]
 }

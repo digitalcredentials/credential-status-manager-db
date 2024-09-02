@@ -1,7 +1,7 @@
 {
   "name": "@digitalcredentials/credential-status-manager-db",
   "description": "A Typescript library for managing the status of Verifiable Credentials in a Database using Bitstring Status List.",
-  "version": "0.0.1",
+  "version": "0.0.1-beta.0",
   "license": "MIT",
   "engines": {
     "node": ">=20.0"
@@ -25,12 +25,11 @@
     "LICENSE.md"
   ],
   "main": "dist/index.js",
-  "module": "dist/esm/index.js",
-  "types": "dist/esm/index.d.ts",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/index.js"
+      "import": "./dist/index.js"
     }
   },
   "publishConfig": {
@@ -44,8 +43,8 @@
     "spec": "dist/test/**/*.js"
   },
   "scripts": {
-    "build": "npm run clear && tsc -d && tsc -p tsconfig.esm.json",
-    "build-test": "npm run clear && tsc -d && tsc -p tsconfig.spec.json",
+    "build": "npm run clear && tsc -p tsconfig.json",
+    "build-test": "npm run clear && tsc -p tsconfig.spec.json",
     "clear": "rimraf dist/*",
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
