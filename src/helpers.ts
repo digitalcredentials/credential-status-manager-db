@@ -63,6 +63,7 @@ interface GetSigningKeysResult {
   issuerDid: string;
   keyPairs: Map<string, any>;
   verificationMethod: string;
+  signingKey: any;
 }
 
 // validates credential
@@ -122,16 +123,15 @@ export async function signCredential({
   didWebUrl
 }: SignCredentialOptions): Promise<VerifiableCredential> {
   const {
-    keyPairs,
-    verificationMethod
+    signingKey
   } = await getSigningMaterial({
     didMethod,
     didSeed,
     didWebUrl
   });
-  const key = keyPairs.get(verificationMethod);
+
   const date = getDateString();
-  const suite = new Ed25519Signature2020({ key, date });
+  const suite = new Ed25519Signature2020({ key:signingKey, date });
   return sign({
     credential,
     documentLoader,
@@ -145,39 +145,54 @@ export async function getSigningMaterial({
   didSeed,
   didWebUrl
 }: GetSigningKeysOptions)
-: Promise<GetSigningKeysResult> {
+  : Promise<GetSigningKeysResult> {
   let didDocument;
   let keyPairs;
+  let methodFor;
+  let signingKey;
+  let verificationMethod;
   const didSeedBytes = decodeSeed(didSeed);
-  switch (didMethod) {
-    case DidMethod.Key:
-      const verificationKeyPair = await Ed25519VerificationKey2020.generate({
-        seed: didSeedBytes
+  if (didMethod === DidMethod.Key) {
+    const verificationKeyPair = await Ed25519VerificationKey2020.generate({
+      seed: didSeedBytes
     });
-    ({ didDocument, keyPairs } = await didKeyDriver.fromKeyPair({
-        verificationKeyPair
-      }));
-    break;
-    case DidMethod.Web:
-      ({ didDocument, keyPairs } = await didWebDriver.generate({
-        seed: didSeedBytes,
-        url: didWebUrl
-      }));
-      break;
-    default:
-      throw new BadRequestError({
-        message:
-          '"didMethod" must be one of the following values: ' +
-          `${Object.values(DidMethod).map(m => `"${m}"`).join(', ')}.`
-      });
+    ({ didDocument, keyPairs, methodFor } = await didKeyDriver.fromKeyPair({
+      verificationKeyPair
+    }));
+
+    const assertionMethod = methodFor({ purpose: 'assertionMethod' })
+    signingKey = await Ed25519VerificationKey2020.from({
+      type: assertionMethod.type,
+      controller: assertionMethod.controller,
+      id: assertionMethod.id,
+      publicKeyMultibase: assertionMethod.publicKeyMultibase,
+      privateKeyMultibase: verificationKeyPair.privateKeyMultibase
+    })
+    verificationMethod = extractId(didDocument.assertionMethod[0]);
+  } else if (didMethod === DidMethod.Web) {
+    ({ didDocument, keyPairs } = await didWebDriver.generate({
+      seed: didSeedBytes,
+      url: didWebUrl
+    }));
+    verificationMethod = extractId(didDocument.assertionMethod[0]);
+    signingKey = keyPairs.get(verificationMethod);
+  } else {
+    throw new BadRequestError({
+      message:
+        '"didMethod" must be one of the following values: ' +
+        `${Object.values(DidMethod).map(m => `"${m}"`).join(', ')}.`
+    });
   }
+
   const issuerDid = didDocument.id;
-  const verificationMethod = extractId(didDocument.assertionMethod[0]);
+  
+
   return {
     didDocument,
     issuerDid,
     keyPairs,
-    verificationMethod
+    verificationMethod,
+    signingKey
   };
 }
 
@@ -188,7 +203,7 @@ function decodeSeed(didSeed: string): Uint8Array {
     // This is a multibase-encoded seed
     didSeedBytes = decodeSecretKeySeed({ secretKeySeed: didSeed });
   } else if (didSeed.length >= 32) {
-      didSeedBytes = (new TextEncoder()).encode(didSeed).slice(0, 32);
+    didSeedBytes = (new TextEncoder()).encode(didSeed).slice(0, 32);
   } else {
     throw new InvalidDidSeedError();
   }
@@ -199,7 +214,7 @@ function decodeSeed(didSeed: string): Uint8Array {
 function extractId(objectOrString: any): string {
   if (typeof objectOrString === 'string') {
     return objectOrString;
-  } 
+  }
   return objectOrString.id;
 }
 
