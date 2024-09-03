@@ -1,6 +1,7 @@
 /*!
  * Copyright (c) 2024 Digital Credentials Consortium. All rights reserved.
  */
+import { Mutex } from 'async-mutex';
 import dns from 'dns';
 import {
   ClientSession,
@@ -17,10 +18,11 @@ import {
   DatabaseConnectionOptions,
   DatabaseService
 } from './credential-status-manager-base.js';
-import { BadRequestError, WriteConflictError } from './errors.js';
+import { BadRequestError, InvalidDatabaseTransactionError, StatusListCapacityError, WriteConflictError } from './errors.js';
+import { ConcurrencyLimiter } from './concurrency-limiter.js';
 
 // Type definition for MongoDB connection
-interface MongoDbConnection {
+export interface MongoDbConnection {
   client: MongoClient;
   database: Db;
 }
@@ -31,6 +33,32 @@ export type MongoDbConnectionOptions = DatabaseConnectionOptions & {
   client?: MongoClient;
   session?: ClientSession;
 };
+
+// This is a general database timeout
+const GENERAL_DATABASE_TIMEOUT_MS = 30 * 60 * 1000; // 30 mins
+
+// This limits the number of concurrent transactions
+// (assumes that there is one client process running transactions in parallel)
+const CONCURRENCY_LIMIT = 200;
+const MAX_POOL_SIZE = CONCURRENCY_LIMIT + 100;
+const concurrencyLimiter = new ConcurrencyLimiter(CONCURRENCY_LIMIT);
+
+// This reuses the database URL across transactions
+// (cache expires after 5 mins)
+const DB_URL_CACHE_DURATION_MS = 5 * 60 * 1000;
+const databaseUrlCache = new Map<string, { url: string; expirationTime: number; }>();
+
+// This reuses the MongoDB database client across transactions
+// (cache expires after 5 mins)
+const DB_CLIENT_CACHE_DURATION_MS = 5 * 60 * 1000;
+const databaseClientCache = new Map<string, { client: MongoClient; expirationTime: number; }>();
+
+// This controls which transactions can open or close a database connection
+const databaseClientLock = new Mutex();
+
+// This tracks the number of active transactions
+let activeDatabaseTransactionsCounter = 0;
+const activeDatabaseTransactionsCounterLock = new Mutex();
 
 // Implementation of BaseCredentialStatusManager for MongoDB
 export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager {
@@ -60,13 +88,32 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
           `"databaseHost", "databasePort", "databaseUsername", and "databasePassword".`
       });
     }
+    
+    // attempt to retrieve cached SRV info and check if still valid
+    const databaseHostKey = `_mongodb._tcp.${databaseHost}`;
+    const currentTime = Date.now();
+    if (databaseUrlCache.has(databaseHostKey)) {
+      const databaseUrlCacheEntry = databaseUrlCache.get(databaseHostKey);
+      if (databaseUrlCacheEntry) {
+        const { url, expirationTime } = databaseUrlCacheEntry;
+        if (currentTime < expirationTime) {
+          return Promise.resolve(url);
+        }
+      }
+    }
 
     return new Promise((resolve, reject) => {
-      dns.resolveSrv(`_mongodb._tcp.${databaseHost}`, (error, records) => {
+      let url = `mongodb://${databaseUsername}:${databasePassword}@${databaseHost}:${databasePort}?retryWrites=false`;
+      const expirationTime = currentTime + DB_URL_CACHE_DURATION_MS;
+      dns.resolveSrv(databaseHostKey, (error, records) => {
         if (error) {
           if (error.code === 'ENODATA' || error.code === 'ENOTFOUND') {
             // SRV records not found
-            resolve(`mongodb://${databaseUsername}:${databasePassword}@${databaseHost}:${databasePort}?retryWrites=false`);
+            databaseUrlCache.set(databaseHostKey, {
+              url,
+              expirationTime
+            });
+            resolve(url);
           } else {
             // other DNS-related error
             reject(error);
@@ -74,13 +121,22 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
         } else {
           if (records.length > 0) {
             // SRV records found
-            resolve(`mongodb+srv://${databaseUsername}:${databasePassword}@${databaseHost}?retryWrites=false`);
+            url = `mongodb+srv://${databaseUsername}:${databasePassword}@${databaseHost}?retryWrites=false`;
+            databaseUrlCache.set(databaseHostKey, {
+              url,
+              expirationTime
+            });
+            resolve(url);
           } else {
             // SRV records not found
-            resolve(`mongodb://${databaseUsername}:${databasePassword}@${databaseHost}:${databasePort}?retryWrites=false`);
+            databaseUrlCache.set(databaseHostKey, {
+              url,
+              expirationTime
+            });
+            resolve(url);
           }
         }
-      }); 
+      });
     });
   }
 
@@ -101,68 +157,157 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     return this.getDatabaseUrlHelper(options);
   }
 
-  // retrieve database client
+  // retrieves database client (assumes calling only from connectDatabase, which locks the client)
   async getDatabaseClient(options?: MongoDbConnectionOptions): Promise<MongoClient> {
     // get database URL
     const databaseUrl = await this.getDatabaseUrl(options);
-    // create fresh MongoDB client
-    const client = new MongoClient(databaseUrl);
+
+    // attempt to retrieve cached database client and check if still valid
+    const currentTime = Date.now();
+    if (databaseClientCache.has(databaseUrl)) {
+      const databaseClientCacheEntry = databaseClientCache.get(databaseUrl);
+      if (databaseClientCacheEntry) {
+        const { client, expirationTime } = databaseClientCacheEntry;
+        if (currentTime < expirationTime) {
+          const databaseConnected = await this.isDatabaseConnected(client);
+          if (!databaseConnected) {
+            await client.connect();
+          }
+          return client;
+        }
+      }
+    }
+
+    // create fresh MongoDB client, connect it to database,
+    // and cache it for future transactions
+    const client = new MongoClient(
+      databaseUrl, {
+        maxPoolSize: MAX_POOL_SIZE,
+        serverSelectionTimeoutMS: GENERAL_DATABASE_TIMEOUT_MS,
+        socketTimeoutMS: GENERAL_DATABASE_TIMEOUT_MS
+      }
+    );
+    await client.connect();
+    const expirationTime = currentTime + DB_CLIENT_CACHE_DURATION_MS;
+    databaseClientCache.set(databaseUrl, { client, expirationTime });
     return client;
   }
 
   // connects to database
   async connectDatabase(options?: MongoDbConnectionOptions): Promise<MongoDbConnection> {
-    const { client } = options ?? {};
-    if (client) {
-      await client.connect();
-      const database = client.db(this.databaseName);
-      return { client, database };
+    // acquire a lock on the client to ensure that only one
+    // transaction opens a connection on it
+    const release = await databaseClientLock.acquire();
+    try {
+      const { client } = options ?? {};
+      if (client) {
+        await client.connect();
+        const database = client.db(this.databaseName);
+        return { client, database };
+      }
+      const newClient = await this.getDatabaseClient(options);
+      await newClient.connect();
+      const database = newClient.db(this.databaseName);
+      return { client: newClient, database };
+    } finally {
+      release();
     }
-    const newClient = await this.getDatabaseClient(options);
-    await newClient.connect();
-    const database = newClient.db(this.databaseName);
-    return { client: newClient, database };
   }
 
   // disconnects from database
   async disconnectDatabase(client?: MongoClient): Promise<void> {
-    if (client) {
-      await client.close();
+    // acquire a lock on the client and the active database transaction counter
+    // to ensure that a transaction closes a connection only when there are no
+    // active transactions
+    const clientRelease = await databaseClientLock.acquire();
+    const counterRelease = await activeDatabaseTransactionsCounterLock.acquire();
+    try {
+      if (!client) {
+        return;
+      }
+      const databaseConnected = await this.isDatabaseConnected(client);
+      if (!databaseConnected) {
+        return;
+      }
+      activeDatabaseTransactionsCounter -= 1;
+      if (activeDatabaseTransactionsCounter === 0) {
+        await client.close();
+      }
+    } finally {
+      counterRelease();
+      clientRelease();
     }
+  }
+
+  // checks if database is connected
+  async isDatabaseConnected(client: MongoClient): Promise<boolean> {
+    try {
+      await client.db().command({ ping: 1 });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // handles errors that can occur from any transaction
+  handleGeneralErrors(error: any): void {
+    if (error.codeName === 'NoSuchTransaction' || error.codeName === 'CursorNotFound') {
+      // throw error that will be caught by executeTransaction for retry
+      throw new InvalidDatabaseTransactionError();
+    }
+    // unhandled error that we should allow to halt execution
+    throw error;
   }
 
   // executes function as transaction
   async executeTransaction(func: (options?: MongoDbConnectionOptions) => Promise<any>): Promise<any> {
-    let done = false;
-    while (!done) {
-      const { client } = await this.connectDatabase();
-      const session = client.startSession();
-      const transactionOptions: TransactionOptions = {
-        readPreference: ReadPreference.primary,
-        readConcern: { level: ReadConcernLevel.local },
-        writeConcern: { w: 'majority' },
-        maxTimeMS: 30000
-      };
+    return concurrencyLimiter.execute(async () => {
+      // acquire a lock on the active database transaction counter
+      // as early as possible in order to signal that the connection
+      // should remain open
+      const release = await activeDatabaseTransactionsCounterLock.acquire();
       try {
-        const finalResult = await session.withTransaction(async () => {
-          const funcResult = await func({ client, session });
-          done = true;
-          return funcResult;
-        }, transactionOptions);
-        done = true;
-        return finalResult;
-      } catch (error) {
-        if (!(error instanceof WriteConflictError)) {
-          done = true;
-          throw error;
-        }
-        const delay = Math.floor(Math.random() * 1000);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        activeDatabaseTransactionsCounter += 1;
       } finally {
-        await session.endSession();
-        await this.disconnectDatabase(client);
+        release();
       }
-    }
+      let done = false;
+      while (!done) {
+        let client: MongoClient | undefined;
+        let session: ClientSession | undefined;
+        const transactionOptions: TransactionOptions = {
+          readPreference: ReadPreference.primary,
+          readConcern: { level: ReadConcernLevel.local },
+          writeConcern: { w: 'majority' },
+          maxTimeMS: GENERAL_DATABASE_TIMEOUT_MS
+        };
+        try {
+          ({ client } = await this.connectDatabase());
+          session = client.startSession();
+          const finalResult = await session.withTransaction(async () => {
+            const funcResult = await func({ client, session });
+            return funcResult;
+          }, transactionOptions);
+          done = true;
+          await this.disconnectDatabase(client);
+          return finalResult;
+        } catch (error) {
+          if (!(error instanceof WriteConflictError ||
+            error instanceof InvalidDatabaseTransactionError ||
+            error instanceof StatusListCapacityError)) {
+            done = true;
+            await this.disconnectDatabase(client);
+            throw error;
+          }
+          const delay = Math.floor(Math.random() * 1000);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } finally {
+          if (session) {
+            await session.endSession();
+          }
+        }
+      }
+    });
   }
 
   // checks if caller has authority to manage status based on authorization credentials
@@ -194,6 +339,29 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
   // (database tables are implicitly created in MongoDB)
   async createDatabaseTable(tableName: string, options?: MongoDbConnectionOptions): Promise<void> {}
 
+  // creates unique database table index
+  // (database tables are implicitly created in MongoDB)
+  async createUniqueDatabaseTableIndex(tableName: string, fields: string[], options?: MongoDbConnectionOptions): Promise<void> {
+    const optionsObject = options ?? {};
+    const { client: clientCandidate, session } = optionsObject;
+    let client = clientCandidate;
+    try {
+      const databaseConnection = await this.connectDatabase(options);
+      const { database } = databaseConnection;
+      ({ client } = databaseConnection);
+      const table = database.collection(tableName);
+      const uniqueFieldMap = Object.fromEntries(fields.map(f => [f, 1]));
+      await table.createIndex(uniqueFieldMap, { unique: true, sparse: true });
+    } catch (error: any) {
+      this.handleGeneralErrors(error);
+    } finally {
+      if (!session) {
+        // otherwise handled in executeTransaction
+        await this.disconnectDatabase(client);
+      }
+    }
+  }
+
   // checks if database exists
   async databaseExists(options?: MongoDbConnectionOptions): Promise<boolean> {
     const optionsObject = options ?? {};
@@ -210,7 +378,8 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       if (error.codeName === 'NamespaceNotFound') {
         return false;
       }
-      throw error;
+      this.handleGeneralErrors(error);
+      return false;
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -231,6 +400,9 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const table = database.collection(tableName);
       const record = await table.findOne({}, { session });
       return !!record;
+    } catch (error: any) {
+      this.handleGeneralErrors(error);
+      return false;
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -252,6 +424,9 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const query = {};
       const recordCount = await table.countDocuments(query, { session });
       return recordCount === 0;
+    } catch (error: any) {
+      this.handleGeneralErrors(error);
+      return true;
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -272,11 +447,12 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const table = database.collection(tableName);
       await table.insertOne(record as Document, { session });
     } catch (error: any) {
-      if (error.codeName === 'WriteConflict') {
+      if (error.codeName === 'WriteConflict' || error.codeName === 'DuplicateKey' || error.code === 11000) {
         throw new WriteConflictError({
           message: error.message
         });
       }
+      this.handleGeneralErrors(error);
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -303,6 +479,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
           message: error.message
         });
       }
+      this.handleGeneralErrors(error);
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -324,6 +501,8 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const table = database.collection(tableName);
       const query = {};
       record = await table.findOne(query, { session });
+    } catch (error: any) {
+      this.handleGeneralErrors(error);
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -346,6 +525,8 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const table = database.collection(tableName);
       const query = { [fieldKey]: fieldValue };
       record = await table.findOne(query, { session });
+    } catch (error: any) {
+      this.handleGeneralErrors(error);
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -368,6 +549,9 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const table = database.collection(tableName);
       const query = {};
       records = await table.find(query, { session }).toArray();
+    } catch (error: any) {
+      this.handleGeneralErrors(error);
+      return [];
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
@@ -390,6 +574,9 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
       const table = database.collection(tableName);
       const query = { [fieldKey]: fieldValue };
       records = await table.find(query, { session }).toArray();
+    } catch (error: any) {
+      this.handleGeneralErrors(error);
+      return [];
     } finally {
       if (!session) {
         // otherwise handled in executeTransaction
