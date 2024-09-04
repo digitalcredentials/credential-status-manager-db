@@ -37,7 +37,7 @@ class MockMongoDbCredentialStatusManager extends MongoDbStatus.MongoDbCredential
     super(options);
   }
 
-  // retrieve database client
+  // retrieves database client (assumes calling only from connectDatabase, which locks the client)
   async getDatabaseClient(options?: MongoDbStatus.MongoDbConnectionOptions) {
     if (!this.server) {
       this.server = await MongoMemoryServer.create();
@@ -45,6 +45,13 @@ class MockMongoDbCredentialStatusManager extends MongoDbStatus.MongoDbCredential
     const databaseUrl = this.server.getUri();
     const client = new MongoDb.MongoClient(databaseUrl);
     return client;
+  }
+
+  // disconnects from database
+  async disconnectDatabase(client?: MongoDb.MongoClient): Promise<void> {
+    if (client) {
+      await client.close();
+    }
   }
 
   // executes function as transaction
@@ -102,19 +109,19 @@ describe('MongoDB Credential Status Manager', () => {
   it('tests allocateRevocationStatus', async () => {
     // allocate and check status for first credential
     const credentialWithStatus1 = await statusManager.allocateRevocationStatus(unsignedCredential1) as any;
-    checkLocalCredentialStatus(credentialWithStatus1, 1);
+    checkLocalCredentialStatus(credentialWithStatus1);
 
     // allocate and check status for second credential
     const credentialWithStatus2 = await statusManager.allocateRevocationStatus(unsignedCredential2) as any;
-    checkLocalCredentialStatus(credentialWithStatus2, 2);
+    checkLocalCredentialStatus(credentialWithStatus2);
 
     // allocate and check status for third credential
     const credentialWithStatus3 = await statusManager.allocateRevocationStatus(unsignedCredential3) as any;
-    checkLocalCredentialStatus(credentialWithStatus3, 3);
+    checkLocalCredentialStatus(credentialWithStatus3);
 
     // attempt to allocate and check status for existing credential
     const credentialWithStatus2Copy = await statusManager.allocateRevocationStatus(unsignedCredential2) as any;
-    checkLocalCredentialStatus(credentialWithStatus2Copy, 2);
+    checkLocalCredentialStatus(credentialWithStatus2Copy);
 
     // check if database has valid configuration
     const databaseState = await statusManager.getDatabaseState();
@@ -127,7 +134,7 @@ describe('MongoDB Credential Status Manager', () => {
 
     // check user credential info
     const credentialRecord = await statusManager.getCredentialInfo(credentialWithStatus.id);
-    checkUserCredentialInfo(credentialWithStatus.id, credentialRecord, 1, true);
+    checkUserCredentialInfo(credentialWithStatus.id, credentialRecord, true);
 
     // check if database has valid configuration
     const databaseState = await statusManager.getDatabaseState();
@@ -146,7 +153,7 @@ describe('MongoDB Credential Status Manager', () => {
 
     // check status of credential
     const statusInfo = await statusManager.getStatus(credentialWithStatus.id);
-    checkRemoteCredentialStatus(statusInfo, 1, false);
+    checkRemoteCredentialStatus(statusInfo, false);
 
     // check if database has valid configuration
     const databaseState = await statusManager.getDatabaseState();

@@ -66,6 +66,14 @@ export class InvalidDatabaseStateError extends CustomError {
   }
 }
 
+export class InvalidDatabaseTransactionError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
+    const { message } = options ?? {};
+    const defaultMessage = 'The database transaction you are referencing is invalid.';
+    super({ message, defaultMessage, code: 422 });
+  }
+}
+
 export class InvalidDidSeedError extends CustomError {
   constructor(options?: CustomErrorOptionalOptions) {
     const { message } = options ?? {};
@@ -79,6 +87,14 @@ export class InvalidCredentialsError extends CustomError {
     const { message } = options ?? {};
     const defaultMessage = 'The user credentials you are using to access the database is invalid.';
     super({ message, defaultMessage, code: 401 });
+  }
+}
+
+export class StatusListCapacityError extends CustomError {
+  constructor(options?: CustomErrorOptionalOptions) {
+    const { message } = options ?? {};
+    const defaultMessage = 'Status list has reached maximum safe capacity.';
+    super({ message, defaultMessage, code: 422 });
   }
 }
 

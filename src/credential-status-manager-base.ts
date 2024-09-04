@@ -22,9 +22,16 @@ import {
   signCredential,
   validateCredential
 } from './helpers.js';
+import { IndexAllocator } from './index-allocator.js';
 
-// Number of credentials tracked in a list
-const CREDENTIAL_STATUS_LIST_SIZE = 100000;
+// Theoretical number of credentials that CAN be tracked in a list
+const MAX_CREDENTIAL_STATUS_LIST_SIZE = 100500;
+
+// Buffer between theoretical and safe credential status list size
+const CREDENTIAL_STATUS_LIST_SIZE_BUFFER = 500;
+
+// Safe number of credentials that WILL be tracked in a list to avoid contention
+const SAFE_CREDENTIAL_STATUS_LIST_SIZE = MAX_CREDENTIAL_STATUS_LIST_SIZE - CREDENTIAL_STATUS_LIST_SIZE_BUFFER;
 
 // Length of status credential ID
 const STATUS_CREDENTIAL_ID_LENGTH = 20;
@@ -57,26 +64,24 @@ enum StatusPurpose {
 const SUPPORTED_STATUS_PURPOSES = Object.values(StatusPurpose);
 
 // Type definition for credential status info
-type CredentialStatusInfo = {
-  [purpose in StatusPurpose]: {
+type CredentialStatusInfo =
+  Record<StatusPurpose, {
     statusCredentialId: string;
     statusListIndex: number;
     valid: boolean;
-  };
-}
+  }>;
 
 // Type definition for status credential info
-type StatusCredentialInfo = {
-  [purpose in StatusPurpose]: {
-    latestStatusCredentialId: string;
-    latestCredentialsIssuedCounter: number;
-    statusCredentialsCounter: number;
-  };
-}
+type StatusCredentialInfo =
+  Record<StatusPurpose, {
+    latestId: string;
+    latestOrder: number;
+  }>;
 
 // Type definition for status credential record
 export interface StatusCredentialRecord {
   id: string;
+  order: number;
   purpose: StatusPurpose;
   credential: VerifiableCredential;
 }
@@ -98,19 +103,11 @@ interface EventRecord {
   valid: boolean;
 }
 
-// Type definition for credential event record
-// (saves latest event for credential)
-export interface CredentialEventRecord {
-  credentialId: string;
-  eventId: string;
-}
-
 // Type definition for credential status config record
 export interface ConfigRecord {
   id: string;
   statusCredentialSiteOrigin: string;
   statusCredentialInfo: StatusCredentialInfo;
-  credentialsIssuedCounter: number;
 }
 
 // Type definition for composeStatusCredential function input
@@ -125,17 +122,26 @@ interface ComposeStatusCredentialOptions {
 interface AttachCredentialStatusOptions {
   credential: any;
   statusPurposes: StatusPurpose[];
+  indexAllocators: Record<string, IndexAllocator>;
+  statusCredentialRecordsByPurpose: Record<StatusPurpose, StatusCredentialRecord>;
 }
 
 // Type definition for attachCredentialStatus method output
-type AttachCredentialStatusResult = ConfigRecord & {
+interface AttachCredentialStatusResult {
   credential: any;
   credentialStatusInfo: CredentialStatusInfo;
   newUserCredential: boolean;
-  newStatusCredential: {
-    [purpose in StatusPurpose]: boolean;
-  };
-};
+}
+
+// Type definition for input and output of
+// initializeTransactionData and refreshTransactionData methods
+interface TransactionData {
+  config: ConfigRecord;
+  statusPurposes: StatusPurpose[];
+  indexAllocators: Record<string, IndexAllocator>;
+  statusCredentialRecordsByPurpose: Record<StatusPurpose, StatusCredentialRecord>;
+  newStatusCredentialByPurpose: Record<StatusPurpose, boolean>;
+}
 
 // Type definition for allocateStatus method input
 interface AllocateStatusOptions {
@@ -179,7 +185,6 @@ export interface BaseCredentialStatusManagerOptions {
   statusCredentialTableName?: string;
   userCredentialTableName?: string;
   eventTableName?: string;
-  credentialEventTableName?: string;
   configTableName?: string;
   databaseName?: string;
   databaseUrl?: string;
@@ -206,7 +211,6 @@ export abstract class BaseCredentialStatusManager {
   protected readonly statusCredentialTableName: string;
   protected readonly userCredentialTableName: string;
   protected readonly eventTableName: string;
-  protected readonly credentialEventTableName: string;
   protected readonly configTableName: string;
   protected databaseService!: DatabaseService;
   protected readonly databaseName: string;
@@ -232,7 +236,6 @@ export abstract class BaseCredentialStatusManager {
       statusCredentialTableName,
       userCredentialTableName,
       eventTableName,
-      credentialEventTableName,
       configTableName,
       databaseName,
       databaseUrl,
@@ -250,7 +253,6 @@ export abstract class BaseCredentialStatusManager {
     this.statusCredentialTableName = statusCredentialTableName ?? 'StatusCredential';
     this.userCredentialTableName = userCredentialTableName ?? 'UserCredential';
     this.eventTableName = eventTableName ?? 'Event';
-    this.credentialEventTableName = credentialEventTableName ?? 'CredentialEvent';
     this.configTableName = configTableName ?? 'Config';
     this.databaseName = databaseName ?? 'credentialStatus';
     this.databaseUrl = databaseUrl;
@@ -321,7 +323,6 @@ export abstract class BaseCredentialStatusManager {
       this.statusCredentialTableName,
       this.userCredentialTableName,
       this.eventTableName,
-      this.credentialEventTableName,
       this.configTableName
     ];
   }
@@ -382,12 +383,30 @@ export abstract class BaseCredentialStatusManager {
 
   /**
    * Attaches status to credential
-   * 
-   * @param {AttachCredentialStatusOptions} [options] - Credential status attachment options.
+   *
+   * @param {AttachCredentialStatusOptions} [attachCredentialStatusOptions] - Credential status attachment options.
+   *
+   * @param {ConfigRecord} [attachCredentialStatusOptions.credential] - The credential to attach status to.
+   * @param {StatusPurpose[]} [attachCredentialStatusOptions.statusPurposes] - The statuses of interest.
+   * @param {Record<string, IndexAllocator>} [attachCredentialStatusOptions.indexAllocators] - The index allocators for a status credential.
+   * @param {Record<StatusPurpose, StatusCredentialRecord>} [attachCredentialStatusOptions.statusCredentialRecordsByPurpose] - The status credential records by purpose.
+   *
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
    *
    * @returns {Promise<AttachCredentialStatusResult>} Resolves to metadata associated with attached credential status.
    */
-  async attachCredentialStatus({ credential, statusPurposes }: AttachCredentialStatusOptions, options?: DatabaseConnectionOptions): Promise<AttachCredentialStatusResult> {
+  async attachCredentialStatus(
+    attachCredentialStatusOptions: AttachCredentialStatusOptions,
+    options?: DatabaseConnectionOptions
+  ): Promise<AttachCredentialStatusResult> {
+    // destructure method input
+    const {
+      credential,
+      statusPurposes,
+      indexAllocators,
+      statusCredentialRecordsByPurpose
+    } = attachCredentialStatusOptions;
+
     // copy credential and delete appropriate fields
     const credentialCopy = Object.assign({}, credential);
     delete credentialCopy.credentialStatus;
@@ -412,16 +431,10 @@ export abstract class BaseCredentialStatusManager {
     // validate credential before attaching status
     validateCredential(credentialCopy);
 
-    // retrieve config
-    let {
-      statusCredentialInfo,
-      credentialsIssuedCounter,
-      ...configRecordRest
-    } = await this.getConfigRecord(options);
-
     // only search for credential if it was passed with an ID
     if (credentialContainsId) {
       // retrieve record for credential with given ID
+      // (don't fail if credential is not found, as this is common)
       let credentialRecord;
       try {
         credentialRecord = await this.getUserCredentialRecordById(credentialCopy.id, options);
@@ -435,93 +448,261 @@ export abstract class BaseCredentialStatusManager {
         // compose credentialStatus field of credential
         const credentialStatus = this.composeCredentialStatus(statusInfo);
 
-        // compose newStatusCredential, which determines whether to create
-        // a new status credential by purpose
-        const newStatusCredentialEntries =
-          Object.keys(statusInfo).map(purpose => {
-            return [purpose, false];
-          });
-        const newStatusCredential = Object.fromEntries(newStatusCredentialEntries);
-
         return {
           credential: {
             ...credentialCopy,
             credentialStatus
           },
-          newStatusCredential,
           newUserCredential: false,
-          credentialStatusInfo: statusInfo,
-          credentialsIssuedCounter,
-          statusCredentialInfo,
-          ...configRecordRest
+          credentialStatusInfo: statusInfo
         };
       }
     }
 
     // compose credentialStatus field of credential
     const statusInfo = {} as CredentialStatusInfo;
-    const newStatusCredential = {} as { [purpose in StatusPurpose]: boolean };
     for (const statusPurpose of statusPurposes) {
-      let {
-        latestStatusCredentialId,
-        latestCredentialsIssuedCounter,
-        statusCredentialsCounter
-      } = statusCredentialInfo[statusPurpose];
-
-      // allocate new entry if ID is not yet being tracked
-      newStatusCredential[statusPurpose] = false;
-      if (latestCredentialsIssuedCounter >= CREDENTIAL_STATUS_LIST_SIZE) {
-        newStatusCredential[statusPurpose] = true;
-        latestCredentialsIssuedCounter = 0;
-        latestStatusCredentialId = this.generateStatusCredentialId();
-        statusCredentialsCounter++;
-      }
-      latestCredentialsIssuedCounter++;
-
-      // update status credential info
-      statusCredentialInfo[statusPurpose] = {
-        latestStatusCredentialId,
-        latestCredentialsIssuedCounter,
-        statusCredentialsCounter
-      };
+      const statusCredentialRecord = statusCredentialRecordsByPurpose[statusPurpose];
+      const statusCredentialId = statusCredentialRecord.id;
 
       // update credential status info
       statusInfo[statusPurpose] = {
-        statusCredentialId: latestStatusCredentialId,
-        statusListIndex: latestCredentialsIssuedCounter,
+        statusCredentialId,
+        statusListIndex: indexAllocators[statusCredentialId].getAvailableIndex(),
         valid: true
       };
     }
     const credentialStatus = this.composeCredentialStatus(statusInfo);
-    credentialsIssuedCounter++;
 
     return {
       credential: {
         ...credentialCopy,
         credentialStatus
       },
-      newStatusCredential,
       newUserCredential: true,
-      credentialStatusInfo: statusInfo,
-      credentialsIssuedCounter,
-      statusCredentialInfo,
-      ...configRecordRest
+      credentialStatusInfo: statusInfo
+    };
+  }
+
+  /**
+   * Initializes transaction data
+   *
+   * @param {TransactionData} [initializeTransactionDataOptions] - Transaction data initialization options.
+   *
+   * @param {StatusPurpose[]} [initializeTransactionDataOptions.statusPurposes] - The statuses of interest.
+   *
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<TransactionData>} Resolves to transaction data.
+   */
+  async initializeTransactionData({ statusPurposes }: { statusPurposes: StatusPurpose[] }, options?: DatabaseConnectionOptions): Promise<TransactionData> {
+    // retrieve signing material and other useful metadata
+    const {
+      didMethod,
+      didSeed,
+      didWebUrl,
+      signStatusCredential,
+      statusCredentialSiteOrigin
+    } = this;
+    const { issuerDid } = await getSigningMaterial({
+      didMethod,
+      didSeed,
+      didWebUrl
+    });
+    const config = await this.getConfigRecord(options);
+    const indexAllocators = {} as Record<string, IndexAllocator>;
+    const statusCredentialRecordsByPurpose = {} as Record<StatusPurpose, StatusCredentialRecord>;
+    const newStatusCredentialByPurpose = {} as Record<StatusPurpose, boolean>;
+    for (const purpose of statusPurposes) {
+      let statusCredentialId = config.statusCredentialInfo[purpose].latestId;
+      const allocatedIndices = await this.getAllocatedIndicesByStatusCredentialId(statusCredentialId, purpose, options);
+      if (allocatedIndices.length === SAFE_CREDENTIAL_STATUS_LIST_SIZE) {
+        // create new status credential if latest one has reached its max capacity
+        statusCredentialId = this.generateStatusCredentialId();
+        const statusCredentialUrl = `${statusCredentialSiteOrigin}/${statusCredentialId}`;
+        let statusCredential = await composeStatusCredential({
+          issuerDid,
+          credentialId: statusCredentialUrl,
+          statusPurpose: purpose
+        });
+        // sign status credential if necessary
+        if (signStatusCredential) {
+          statusCredential = await signCredential({
+            credential: statusCredential,
+            didMethod,
+            didSeed,
+            didWebUrl
+          });
+        }
+        indexAllocators[statusCredentialId] = new IndexAllocator(
+          [],
+          MAX_CREDENTIAL_STATUS_LIST_SIZE,
+          CREDENTIAL_STATUS_LIST_SIZE_BUFFER
+        );
+        newStatusCredentialByPurpose[purpose] = true;
+        config.statusCredentialInfo[purpose].latestId = statusCredentialId;
+        statusCredentialRecordsByPurpose[purpose] = {
+          id: statusCredentialId,
+          order: config.statusCredentialInfo[purpose].latestOrder + 1,
+          purpose,
+          credential: statusCredential
+        };
+      } else {
+        // utilize latest status credential if it has not reached its max capacity
+        indexAllocators[statusCredentialId] = new IndexAllocator(
+          allocatedIndices,
+          MAX_CREDENTIAL_STATUS_LIST_SIZE,
+          CREDENTIAL_STATUS_LIST_SIZE_BUFFER
+        );
+        newStatusCredentialByPurpose[purpose] = false;
+        statusCredentialRecordsByPurpose[purpose] = await this.getStatusCredentialRecordById(statusCredentialId, options);
+      }
+    }
+    return {
+      config,
+      statusPurposes,
+      indexAllocators,
+      statusCredentialRecordsByPurpose,
+      newStatusCredentialByPurpose
+    };
+  }
+
+  /**
+   * Refreshes transaction data
+   *
+   * @param {TransactionData} [transactionData] - Transaction data.
+   *
+   * @param {ConfigRecord} [transactionData.config] - The config record.
+   * @param {StatusPurpose[]} [transactionData.statusPurposes] - The statuses of interest.
+   * @param {Record<string, IndexAllocator>} [transactionData.indexAllocators] - The index allocators for a status credential.
+   * @param {Record<StatusPurpose, StatusCredentialRecord>} [transactionData.statusCredentialRecordsByPurpose] - The status credential records by purpose.
+   * @param {Record<StatusPurpose, boolean>} [transactionData.newStatusCredentialByPurpose] - Whether a new status credential record should be created for each purpose.
+   *
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<TransactionData>} Resolves to transaction data.
+   */
+  async refreshTransactionData(transactionData: TransactionData, options?: DatabaseConnectionOptions): Promise<TransactionData> {
+    // retrieve old transaction data
+    const {
+      config: oldConfig,
+      statusPurposes,
+      indexAllocators: oldIndexAllocators,
+      statusCredentialRecordsByPurpose: oldStatusCredentialRecordsByPurpose,
+      newStatusCredentialByPurpose: oldNewStatusCredentialByPurpose
+    } = transactionData;
+
+    // retrieve signing material and other useful metadata
+    const {
+      didMethod,
+      didSeed,
+      didWebUrl,
+      signStatusCredential,
+      statusCredentialSiteOrigin
+    } = this;
+    const { issuerDid } = await getSigningMaterial({
+      didMethod,
+      didSeed,
+      didWebUrl
+    });
+    const config = await this.getConfigRecord(options);
+    const indexAllocators = {} as Record<string, IndexAllocator>;
+    const statusCredentialRecordsByPurpose = {} as Record<StatusPurpose, StatusCredentialRecord>;
+    const newStatusCredentialByPurpose = {} as Record<StatusPurpose, boolean>;
+    for (const purpose of statusPurposes) {
+      let statusCredentialId = config.statusCredentialInfo[purpose].latestId;
+      let statusCredentialOrder = config.statusCredentialInfo[purpose].latestOrder;
+      // NOTE: one of the two operands of this condition should suffice
+      if (
+        oldConfig.statusCredentialInfo[purpose].latestId !== statusCredentialId ||
+        oldConfig.statusCredentialInfo[purpose].latestOrder !== statusCredentialOrder
+      ) {
+        // retrieve data associated with latest status credential
+        const allocatedIndices = await this.getAllocatedIndicesByStatusCredentialId(statusCredentialId, purpose, options);
+        indexAllocators[statusCredentialId] = new IndexAllocator(
+          allocatedIndices,
+          MAX_CREDENTIAL_STATUS_LIST_SIZE,
+          CREDENTIAL_STATUS_LIST_SIZE_BUFFER
+        );
+        newStatusCredentialByPurpose[purpose] = false;
+        statusCredentialRecordsByPurpose[purpose] = await this.getStatusCredentialRecordById(statusCredentialId, options);
+      } else if (oldIndexAllocators[statusCredentialId].getAvailableIndexCounter() <= CREDENTIAL_STATUS_LIST_SIZE_BUFFER) {
+        // create new status credential if latest one has reached its max capacity
+        statusCredentialId = this.generateStatusCredentialId();
+        const statusCredentialUrl = `${statusCredentialSiteOrigin}/${statusCredentialId}`;
+        let statusCredential = await composeStatusCredential({
+          issuerDid,
+          credentialId: statusCredentialUrl,
+          statusPurpose: purpose
+        });
+        // sign status credential if necessary
+        if (signStatusCredential) {
+          statusCredential = await signCredential({
+            credential: statusCredential,
+            didMethod,
+            didSeed,
+            didWebUrl
+          });
+        }
+        indexAllocators[statusCredentialId] = new IndexAllocator(
+          [],
+          MAX_CREDENTIAL_STATUS_LIST_SIZE,
+          CREDENTIAL_STATUS_LIST_SIZE_BUFFER
+        );
+        newStatusCredentialByPurpose[purpose] = true;
+        config.statusCredentialInfo[purpose].latestId = statusCredentialId;
+        statusCredentialOrder += 1;
+        config.statusCredentialInfo[purpose].latestOrder = statusCredentialOrder;
+        statusCredentialRecordsByPurpose[purpose] = {
+          id: statusCredentialId,
+          order: statusCredentialOrder,
+          purpose,
+          credential: statusCredential
+        };
+      } else {
+        // utilize the same data, since status credential has not changed
+        indexAllocators[statusCredentialId] = oldIndexAllocators[statusCredentialId];
+        newStatusCredentialByPurpose[purpose] = oldNewStatusCredentialByPurpose[purpose];
+        statusCredentialRecordsByPurpose[purpose] = oldStatusCredentialRecordsByPurpose[purpose];
+      }
+    }
+    return {
+      config,
+      statusPurposes,
+      indexAllocators,
+      statusCredentialRecordsByPurpose,
+      newStatusCredentialByPurpose
     };
   }
 
   /**
    * Allocates status for credential
    *
-   * @param {AllocateStatusOptions} [options={}] - The options to use.
+   * @param {AllocateStatusOptions} [allocateStatusOptions] - Credential status allocation options.
    * 
-   * @param {VerifiableCredential} [options.credential] - The credential for which to allocate status.
-   * @param {StatusPurpose[]} [options.statusPurposes] - The statuses to allocate for the credential.
+   * @param {VerifiableCredential} [allocateStatusOptions.credential] - The credential for which to allocate status.
+   * @param {StatusPurpose[]} [allocateStatusOptions.statusPurposes] - The statuses to allocate for the credential.
    *
    * @throws {BadRequestError} If credential is in JWT format.
    *
    * @returns {Promise<VerifiableCredential>} Resolves to new credential with status.
    */
-  async allocateStatus({ credential, statusPurposes }: AllocateStatusOptions): Promise<VerifiableCredential> {
+  async allocateStatus(allocateStatusOptions: AllocateStatusOptions): Promise<VerifiableCredential> {
+    // destructure method input
+    const {
+      credential,
+      statusPurposes
+    } = allocateStatusOptions;
+
+    // track whether transaction data has been initialized
+    let transactionDataInitialized = false;
+
+    // declare transaction data
+    let config: ConfigRecord;
+    let indexAllocators: Record<string, IndexAllocator>;
+    let statusCredentialRecordsByPurpose: Record<StatusPurpose, StatusCredentialRecord>;
+    let newStatusCredentialByPurpose: Record<StatusPurpose, boolean>;
+
     return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // report error for compact JWT credentials
       if (typeof credential === 'string') {
@@ -530,22 +711,52 @@ export abstract class BaseCredentialStatusManager {
         });
       }
 
-      // attach status to credential
-      let {
-        credential: credentialWithStatus,
-        newStatusCredential,
-        newUserCredential,
-        credentialStatusInfo,
-        statusCredentialInfo,
-        ...attachCredentialStatusResultRest
-      } = await this.attachCredentialStatus({ credential, statusPurposes }, options);
+      // initialize transaction data if necessary
+      if (!transactionDataInitialized) {
+        // retrieve all allocated indices for latest status credential to guide random index guessing
+        ({
+          config,
+          indexAllocators,
+          statusCredentialRecordsByPurpose,
+          newStatusCredentialByPurpose
+        } = await this.initializeTransactionData({ statusPurposes }, options));
+        transactionDataInitialized = true;
+      }
 
-      // retrieve signing material
+      // attach status to credential
+      let credentialWithStatus;
+      let newUserCredential;
+      let credentialStatusInfo;
+      try {
+        ({
+          credential: credentialWithStatus,
+          newUserCredential,
+          credentialStatusInfo
+        } = await this.attachCredentialStatus({ credential, statusPurposes, indexAllocators, statusCredentialRecordsByPurpose }, options));
+      } catch (error) {
+        // refresh transaction data if the status list
+        // reaches its maximum safe capacity
+        ({
+          config,
+          indexAllocators,
+          statusCredentialRecordsByPurpose,
+          newStatusCredentialByPurpose
+        } = await this.refreshTransactionData({
+          config,
+          statusPurposes,
+          indexAllocators,
+          statusCredentialRecordsByPurpose,
+          newStatusCredentialByPurpose
+        }, options));
+        // this triggers a retry of the transaction
+        throw error;
+      }
+
+      // retrieve signing material and other useful metadata
       const {
         didMethod,
         didSeed,
         didWebUrl,
-        signStatusCredential,
         signUserCredential
       } = this;
       const { issuerDid } = await getSigningMaterial({
@@ -571,33 +782,30 @@ export abstract class BaseCredentialStatusManager {
       }
 
       // create status credential for each purpose
-      for (const [statusPurpose, newStatusCred] of Object.entries(newStatusCredential)) {
-        // compose new status credential only if the last one has reached capacity
-        const { latestStatusCredentialId } = statusCredentialInfo[statusPurpose as StatusPurpose];
+      for (const [statusPurpose, newStatusCred] of Object.entries(newStatusCredentialByPurpose)) {
         if (newStatusCred) {
-          const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
-          let statusCredential = await composeStatusCredential({
-            issuerDid,
-            credentialId: statusCredentialUrl,
-            statusPurpose: statusPurpose as StatusPurpose
-          });
-
-          // sign status credential if necessary
-          if (signStatusCredential) {
-            statusCredential = await signCredential({
-              credential: statusCredential,
-              didMethod,
-              didSeed,
-              didWebUrl
-            });
+          const statusCredentialRecord = statusCredentialRecordsByPurpose[statusPurpose as StatusPurpose];
+          try {
+            // create status credential record
+            await this.createStatusCredentialRecord(statusCredentialRecord, options);
+          } catch (error) {
+            // refresh transaction data if there is a write conflict
+            // while saving the status credential record
+            ({
+              config,
+              indexAllocators,
+              statusCredentialRecordsByPurpose,
+              newStatusCredentialByPurpose
+            } = await this.refreshTransactionData({
+              config,
+              statusPurposes,
+              indexAllocators,
+              statusCredentialRecordsByPurpose,
+              newStatusCredentialByPurpose
+            }, options));
+            // this triggers a retry of the transaction
+            throw error;
           }
-
-          // create status credential record
-          await this.createStatusCredentialRecord({
-            id: latestStatusCredentialId,
-            purpose: statusPurpose as StatusPurpose,
-            credential: statusCredential
-          }, options);
         }
       }
 
@@ -610,32 +818,45 @@ export abstract class BaseCredentialStatusManager {
         subject: credentialSubjectObject?.id,
         statusInfo: credentialStatusInfo
       };
-      await this.createUserCredentialRecord(credentialRecord, options);
+      try {
+        // create user credential record
+        await this.createUserCredentialRecord(credentialRecord, options);
+      } catch (error) {
+        // refresh transaction data if there is a write conflict
+        // while saving the user credential record
+        ({
+          config,
+          indexAllocators,
+          statusCredentialRecordsByPurpose,
+          newStatusCredentialByPurpose
+        } = await this.refreshTransactionData({
+          config,
+          statusPurposes,
+          indexAllocators,
+          statusCredentialRecordsByPurpose,
+          newStatusCredentialByPurpose
+        }, options));
+        // this triggers a retry of the transaction
+        throw error;
+      }
 
       // create a new event and credential event record for each purpose
-      const timestamp = getDateString();
       for (const statusPurpose of statusPurposes) {
         // create new event record
-        const eventId = uuid();
         const event: EventRecord = {
-          id: eventId,
-          timestamp,
+          id: uuid(),
+          timestamp: getDateString(),
           credentialId,
           statusPurpose,
           valid: true
         };
         await this.createEventRecord(event, options);
-        await this.createCredentialEventRecord({
-          credentialId,
-          eventId
-        }, options);
       }
 
-      // update config record
-      await this.updateConfigRecord({
-        statusCredentialInfo,
-        ...attachCredentialStatusResultRest
-      }, options);
+      // Only update config record when a new status credential is created
+      if (Object.values(newStatusCredentialByPurpose).some(n => n)) {
+        await this.updateConfigRecord(config);
+      }
 
       return credentialWithStatus;
     });
@@ -702,22 +923,24 @@ export abstract class BaseCredentialStatusManager {
   /**
    * Updates status for credential
    *
-   * @param {UpdateStatusOptions} [options={}] - The options to use.
+   * @param {UpdateStatusOptions} [updateStatusOptions] - Credential status update options.
    * 
-   * @param {string} [options.credentialId] - The ID of the credential for which to update status.
-   * @param {StatusPurpose} [options.statusPurpose] - The status to update for the credential.
-   * @param {boolean} [options.invalidate] - Whether to invalidate the status of the credential for the given purpose.
+   * @param {string} [updateStatusOptions.credentialId] - The ID of the credential for which to update status.
+   * @param {StatusPurpose} [updateStatusOptions.statusPurpose] - The status to update for the credential.
+   * @param {boolean} [updateStatusOptions.invalidate] - Whether to invalidate the status of the credential for the given purpose.
    *
    * @throws {BadRequestError} If the credential is not being tracked for the given purpose
    *   or if the status credential is in JWT format.
    *
    * @returns {Promise<VerifiableCredential>} Resolves to updated status credential.
    */
-  async updateStatus({
-    credentialId,
-    statusPurpose,
-    invalidate
-  }: UpdateStatusOptions): Promise<VerifiableCredential> {
+  async updateStatus(updateStatusOptions: UpdateStatusOptions): Promise<VerifiableCredential> {
+    // destructure method input
+    const {
+      credentialId,
+      statusPurpose,
+      invalidate
+    } = updateStatusOptions;
     return this.executeTransaction(async (options?: DatabaseConnectionOptions) => {
       // retrieve record for credential with given ID
       const credentialRecordBefore = await this.getUserCredentialRecordById(credentialId, options);
@@ -738,7 +961,8 @@ export abstract class BaseCredentialStatusManager {
       const { statusCredentialId, statusListIndex, valid } = statusInfo[statusPurpose];
 
       // retrieve status credential
-      const statusCredentialBefore = await this.getStatusCredential(statusCredentialId, options);
+      const statusCredentialRecord = await this.getStatusCredentialRecordById(statusCredentialId, options);
+      const statusCredentialBefore = statusCredentialRecord.credential;
 
       // report error for compact JWT credentials
       if (typeof statusCredentialBefore === 'string') {
@@ -762,7 +986,8 @@ export abstract class BaseCredentialStatusManager {
         didMethod,
         didSeed,
         didWebUrl,
-        signStatusCredential
+        signStatusCredential,
+        statusCredentialSiteOrigin
       } = this;
       const { issuerDid } = await getSigningMaterial({
         didMethod,
@@ -777,7 +1002,7 @@ export abstract class BaseCredentialStatusManager {
         encodedList: statusCredentialListEncodedBefore
       });
       statusCredentialListDecoded.setStatus(statusListIndex, invalidate);
-      const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${statusCredentialId}`;
+      const statusCredentialUrl = `${statusCredentialSiteOrigin}/${statusCredentialId}`;
       let statusCredential = await composeStatusCredential({
         issuerDid,
         credentialId: statusCredentialUrl,
@@ -798,6 +1023,7 @@ export abstract class BaseCredentialStatusManager {
       // update status credential record
       await this.updateStatusCredentialRecord({
         id: statusCredentialId,
+        order: statusCredentialRecord.order,
         purpose: statusPurpose,
         credential: statusCredential
       }, options);
@@ -816,19 +1042,14 @@ export abstract class BaseCredentialStatusManager {
       await this.updateUserCredentialRecord(credentialRecordAfter, options);
 
       // create new event record
-      const eventId = uuid();
       const newEventRecord: EventRecord = {
-        id: eventId,
+        id: uuid(),
         timestamp: getDateString(),
         credentialId,
         statusPurpose,
         valid: !invalidate
       };
       await this.createEventRecord(newEventRecord, options);
-      await this.updateCredentialEventRecord({
-        credentialId,
-        eventId
-      }, options);
 
       return statusCredential;
     });
@@ -933,7 +1154,7 @@ export abstract class BaseCredentialStatusManager {
   abstract createDatabase(options?: DatabaseConnectionOptions): Promise<void>;
 
   /**
-   * Creates database
+   * Creates database table
    * 
    * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
    *
@@ -959,7 +1180,42 @@ export abstract class BaseCredentialStatusManager {
         });
       }
     }
+    // create index for UserCredential to prevent
+    // parallel transactions from using the same
+    // combination of statusListCredential and statusListIndex
+    try {
+      for (const statusPurpose of SUPPORTED_STATUS_PURPOSES) {
+        await this.createUniqueDatabaseTableIndex(
+          this.userCredentialTableName, [
+            `statusInfo.${statusPurpose}.statusCredentialId`,
+            `statusInfo.${statusPurpose}.statusListIndex`
+          ],
+          options
+        );
+      }
+      await this.createUniqueDatabaseTableIndex(
+        this.statusCredentialTableName,
+        ['order', 'purpose'],
+        options
+      );
+    } catch (error: any) {
+      throw new InternalServerError({
+        message: 'Unable to create unique database table index for ' +
+          `"${this.userCredentialTableName}": ${error.message}`
+      });
+    }
   }
+
+  /**
+   * Creates unique database table index
+   * 
+   * @param {string} [tableName] - Name of database table.
+   * @param {string} [fields] - Array of field names to index.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<void>}
+   */
+  abstract createUniqueDatabaseTableIndex(tableName: string, fields: string[], options?: DatabaseConnectionOptions): Promise<void>;
 
   /**
    * Creates database resources
@@ -991,7 +1247,8 @@ export abstract class BaseCredentialStatusManager {
     const {
       didMethod,
       didSeed,
-      didWebUrl
+      didWebUrl,
+      statusCredentialSiteOrigin
     } = this;
     const { issuerDid } = await getSigningMaterial({
       didMethod,
@@ -1004,13 +1261,12 @@ export abstract class BaseCredentialStatusManager {
     for (const statusPurpose of SUPPORTED_STATUS_PURPOSES) {
       const statusCredentialId = this.generateStatusCredentialId();
       statusCredentialInfo[statusPurpose] = {
-        latestStatusCredentialId: statusCredentialId,
-        latestCredentialsIssuedCounter: 0,
-        statusCredentialsCounter: 1
+        latestId: statusCredentialId,
+        latestOrder: 1
       };
 
       // compose status credential
-      const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${statusCredentialId}`;
+      const statusCredentialUrl = `${statusCredentialSiteOrigin}/${statusCredentialId}`;
       let statusCredential = await composeStatusCredential({
         issuerDid,
         credentialId: statusCredentialUrl,
@@ -1030,6 +1286,7 @@ export abstract class BaseCredentialStatusManager {
       // create status credential record
       await this.createStatusCredentialRecord({
         id: statusCredentialId,
+        order: 1,
         purpose: statusPurpose,
         credential: statusCredential
       }, options);
@@ -1038,9 +1295,8 @@ export abstract class BaseCredentialStatusManager {
     // create status config record
     const configRecord: ConfigRecord = {
       id: uuid(),
-      statusCredentialSiteOrigin: this.statusCredentialSiteOrigin,
-      statusCredentialInfo,
-      credentialsIssuedCounter: 0
+      statusCredentialSiteOrigin,
+      statusCredentialInfo
     };
     await this.createConfigRecord(configRecord, options);
   }
@@ -1073,15 +1329,14 @@ export abstract class BaseCredentialStatusManager {
    */
   async databaseTablesExist(options?: DatabaseConnectionOptions): Promise<boolean> {
     const tableNames = this.getDatabaseTableNames();
-    const config = await this.getConfigRecord(options);
+    const anyCredentialIssued = await this.checkAnyCredentialsIssued(options);
     for (const tableName of tableNames) {
       // these tables are only required after credentials have been issued
       if (
         tableName === this.userCredentialTableName ||
-        tableName === this.eventTableName ||
-        tableName === this.credentialEventTableName
+        tableName === this.eventTableName
       ) {
-        if (config.credentialsIssuedCounter === 0) {
+        if (!anyCredentialIssued) {
           continue;
         }
       }
@@ -1119,14 +1374,14 @@ export abstract class BaseCredentialStatusManager {
    */
   async databaseTablesEmpty(options?: DatabaseConnectionOptions): Promise<boolean> {
     const tableNames = this.getDatabaseTableNames();
-    const config = await this.getConfigRecord(options);
+    const anyCredentialIssued = await this.checkAnyCredentialsIssued(options);
     for (const tableName of tableNames) {
       // these tables are only required after credentials have been issued
       if (
-        tableName === this.eventTableName ||
-        tableName === this.credentialEventTableName
+        tableName === this.userCredentialTableName ||
+        tableName === this.eventTableName
       ) {
-        if (config.credentialsIssuedCounter === 0) {
+        if (!anyCredentialIssued) {
           continue;
         }
       }
@@ -1157,8 +1412,7 @@ export abstract class BaseCredentialStatusManager {
       // retrieve config
       const {
         statusCredentialSiteOrigin,
-        statusCredentialInfo,
-        credentialsIssuedCounter
+        statusCredentialInfo
       } = await this.getConfigRecord(options);
 
       // ensure that the status credential site origins match
@@ -1177,24 +1431,15 @@ export abstract class BaseCredentialStatusManager {
 
       // examine info for all status purposes
       const statusPurposes = Object.keys(statusCredentialInfo) as StatusPurpose[];
-      // Note: This is the number of credentials that would be issued if
-      // every credential is assigned to every status purpose, but it is
-      // possible to assign a credential to fewer purposes than the total
-      // number of supported purposes in a given deployment
-      let maxCredentialsIssuedCounter = 0;
       for (const statusPurpose of statusPurposes) {
         // retrieve info for latest status credential
-        const {
-          latestStatusCredentialId,
-          latestCredentialsIssuedCounter,
-          statusCredentialsCounter
-        } = statusCredentialInfo[statusPurpose];
-        const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestStatusCredentialId}`;
+        const { latestId } = statusCredentialInfo[statusPurpose];
+        const statusCredentialUrl = `${this.statusCredentialSiteOrigin}/${latestId}`;
 
         // ensure that status is consistent
         const statusCredentials = await this.getAllStatusCredentialsByPurpose(statusPurpose, options);
         let hasLatestStatusCredentialId = false;
-        const invalidStatusCredentialIds = [];
+        const invalidStatusCredentialIds: string[] = [];
         for (const statusCredential of statusCredentials) {
           // ensure that status credential has valid type
           if (typeof statusCredential === 'string') {
@@ -1210,7 +1455,7 @@ export abstract class BaseCredentialStatusManager {
           // ensure that status credential is well formed
           const statusCredentialSubjectObject = getCredentialSubjectObject(statusCredential);
           const statusPurpose = statusCredentialSubjectObject.statusPurpose as StatusPurpose;
-          hasLatestStatusCredentialId = hasLatestStatusCredentialId || (statusCredential.id?.endsWith(latestStatusCredentialId) ?? false);
+          hasLatestStatusCredentialId = hasLatestStatusCredentialId || (statusCredential.id?.endsWith(latestId) ?? false);
           const hasValidStatusCredentialType = statusCredential.type.includes(STATUS_CREDENTIAL_TYPE);
           const hasValidStatusCredentialSubId = statusCredentialSubjectObject.id?.startsWith(statusCredentialUrl) ?? false;
           const hasValidStatusCredentialSubType = statusCredentialSubjectObject.type === STATUS_CREDENTIAL_SUBJECT_TYPE;
@@ -1220,7 +1465,7 @@ export abstract class BaseCredentialStatusManager {
                                                  hasValidStatusCredentialSubType &&
                                                  hasValidStatusCredentialSubStatusPurpose;
           if (!hasValidStatusCredentialFormat) {
-            invalidStatusCredentialIds.push(statusCredential.id);
+            invalidStatusCredentialIds.push(statusCredential.id as string);
           }
         }
 
@@ -1231,7 +1476,7 @@ export abstract class BaseCredentialStatusManager {
             error: new InvalidDatabaseStateError({
               message: 'Status credentials with the following IDs ' +
                 'have an invalid format: ' +
-                `${invalidStatusCredentialIds.map(id => `"${id as string}"`).join(', ')}`
+                `${invalidStatusCredentialIds.map(id => `"${id}"`).join(', ')}`
             })
           };
         }
@@ -1242,49 +1487,10 @@ export abstract class BaseCredentialStatusManager {
             valid: false,
             error: new InvalidDatabaseStateError({
               message: `Latest status credential for the ${statusPurpose} purpose ` +
-                `("${latestStatusCredentialId}") is not being tracked in the config.`
+                `("${latestId}") is not being tracked in the config.`
             })
           };
         }
-
-        // accumulate credential issuance counter from all status purposes
-        maxCredentialsIssuedCounter += (statusCredentialsCounter - 1) *
-                                       CREDENTIAL_STATUS_LIST_SIZE +
-                                       latestCredentialsIssuedCounter;
-      }
-
-      // retrieve credential IDs from event log
-      const credentialIds = await this.getAllUserCredentialIds(options);
-      const credentialIdsCounter = credentialIds.length;
-      const hasValidIssuedCounterCredentialToConfig = credentialIdsCounter === credentialsIssuedCounter;
-      const hasValidIssuedCounterConfigToMax = credentialsIssuedCounter <= maxCredentialsIssuedCounter;
-
-      // ensure alignment between the number of records in the credential table
-      // and the number of credentials tracked in the config table
-      if (!hasValidIssuedCounterCredentialToConfig) {
-        return {
-          valid: false,
-          error: new InvalidDatabaseStateError({
-            message: 'There is a mismatch between the credentials tracked ' +
-              `in the credential table (${credentialIdsCounter}) ` +
-              'and the credentials tracked ' +
-              `in the config table (${credentialsIssuedCounter}).`
-          })
-        };
-      }
-
-      // ensure that the number of credentials does not exceed the max
-      // number of credentials that can be issued in this deployment
-      if (!hasValidIssuedCounterConfigToMax) {
-        return {
-          valid: false,
-          error: new InvalidDatabaseStateError({
-            message: 'The number of credentials tracked ' +
-              `in the config (${credentialsIssuedCounter}) ` +
-              'exceeds the max number of credentials that could have ' +
-              `been issued in this deployment (${maxCredentialsIssuedCounter}).`
-          })
-        };
       }
 
       // ensure that all checks pass
@@ -1320,6 +1526,9 @@ export abstract class BaseCredentialStatusManager {
     try {
       await this.createRecord(this.statusCredentialTableName, statusCredentialRecord, options);
     } catch (error: any) {
+      if (error instanceof WriteConflictError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to create status credential: ${error.message}`
       });
@@ -1338,6 +1547,9 @@ export abstract class BaseCredentialStatusManager {
     try {
       await this.createRecord(this.userCredentialTableName, userCredentialRecord, options);
     } catch (error: any) {
+      if (error instanceof WriteConflictError) {
+        throw error;
+      }
       throw new InternalServerError({
         message: `Unable to create user credential: ${error.message}`
       });
@@ -1376,24 +1588,6 @@ export abstract class BaseCredentialStatusManager {
     } catch (error: any) {
       throw new InternalServerError({
         message: `Unable to create event: ${error.message}`
-      });
-    }
-  }
-
-  /**
-   * Creates credential event record
-   * 
-   * @param {CredentialEventRecord} [credentialEventRecord] - Credential event record.
-   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
-   *
-   * @returns {Promise<void>}
-   */
-  async createCredentialEventRecord(credentialEventRecord: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
-    try {
-      await this.createRecord(this.credentialEventTableName, credentialEventRecord, options);
-    } catch (error: any) {
-      throw new InternalServerError({
-        message: `Unable to create event for credential: ${error.message}`
       });
     }
   }
@@ -1478,28 +1672,6 @@ export abstract class BaseCredentialStatusManager {
   }
 
   /**
-   * Updates credential event record
-   * 
-   * @param {CredentialEventRecord} [credentialEventRecord] - Credential event record.
-   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
-   *
-   * @returns {Promise<void>}
-   */
-  async updateCredentialEventRecord(credentialEventRecord: CredentialEventRecord, options?: DatabaseConnectionOptions): Promise<void> {
-    try {
-      const { credentialId } = credentialEventRecord;
-      await this.updateRecord(this.credentialEventTableName, 'credentialId', credentialId, credentialEventRecord, options);
-    } catch (error: any) {
-      if (error instanceof WriteConflictError) {
-        throw error;
-      }
-      throw new InternalServerError({
-        message: `Unable to update event for credential: ${error.message}`
-      });
-    }
-  }
-
-  /**
    * Retrieves any database record in table
    * 
    * @param {string} [tableName] - Name of database table.
@@ -1534,6 +1706,25 @@ export abstract class BaseCredentialStatusManager {
       });
     }
     return (record as ConfigRecord).id;
+  }
+
+  /**
+   * Checks whether any credentials have been issued
+   * 
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<boolean>} Resolves to whether any credential has been issued.
+   */
+  async checkAnyCredentialsIssued(options?: DatabaseConnectionOptions): Promise<boolean> {
+    let record;
+    try {
+      record = await this.getAnyRecord(this.userCredentialTableName, options);
+      return !!record;
+    } catch (error: any) {
+      throw new InternalServerError({
+        message: `Unable to get credential record: ${error.message}`
+      });
+    }
   }
 
   /**
@@ -1643,6 +1834,32 @@ export abstract class BaseCredentialStatusManager {
   }
 
   /**
+   * Retrieves allocated indices for a status credential
+   * 
+   * @param {string} [statusCredentialId] - ID of status credential record.
+   * @param {string} [statusPurpose] - Status purpose.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<number[]>} Resolves to allocated indices for status credential.
+   */
+  async getAllUserCredentialIndicesByStatusCredentialId(statusCredentialId: string, statusPurpose: string, options?: DatabaseConnectionOptions): Promise<number[]> {
+    return this.getAllRecordsByField(this.userCredentialTableName, `statusInfo.${statusPurpose}.statusCredentialId`, statusCredentialId, options);
+  }
+
+  /**
+   * Alias for getAllUserCredentialIndicesByStatusCredentialId
+   * 
+   * @param {string} [statusCredentialId] - ID of status credential record.
+   * @param {string} [statusPurpose] - Status purpose.
+   * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
+   *
+   * @returns {Promise<number[]>} Resolves to allocated indices for status credential.
+   */
+  async getAllocatedIndicesByStatusCredentialId(statusCredentialId: string, statusPurpose: string, options?: DatabaseConnectionOptions): Promise<number[]> {
+    return this.getAllUserCredentialIndicesByStatusCredentialId(statusCredentialId, statusPurpose, options);
+  }
+
+  /**
    * Retrieves config record
    * 
    * @param {DatabaseConnectionOptions} [options={}] - Database connection options.
@@ -1725,7 +1942,7 @@ export abstract class BaseCredentialStatusManager {
    * @returns {Promise<VerifiableCredential[]>} Resolves to all matching status credentials.
    */
   async getAllStatusCredentialsByPurpose(purpose: StatusPurpose, options?: DatabaseConnectionOptions): Promise<VerifiableCredential[]> {
-    let statusCredentials = [];
+    let statusCredentials: VerifiableCredential[] = [];
     try {
       const statusCredentialRecords = await this.getAllStatusCredentialRecordsByPurpose(purpose, options);
       statusCredentials = statusCredentialRecords
@@ -1747,7 +1964,7 @@ export abstract class BaseCredentialStatusManager {
    * @returns {Promise<string[]>} Resolves to all user credential IDs.
    */
   async getAllUserCredentialIds(options?: DatabaseConnectionOptions): Promise<string[]> {
-    let credentialIds = [];
+    let credentialIds: string[] = [];
     try {
       const credentialRecords = await this.getAllUserCredentialRecords(options);
       credentialIds = credentialRecords.map(e => e.id);
@@ -1775,7 +1992,7 @@ export async function composeStatusCredential({
 }: ComposeStatusCredentialOptions): Promise<VerifiableCredential> {
   // determine whether or not to create a new status credential
   if (!statusList) {
-    statusList = await createList({ length: CREDENTIAL_STATUS_LIST_SIZE });
+    statusList = await createList({ length: MAX_CREDENTIAL_STATUS_LIST_SIZE });
   }
 
   // create status credential

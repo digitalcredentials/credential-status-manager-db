@@ -64,6 +64,7 @@
     "@digitalcredentials/security-document-loader": "^6.0.0",
     "@digitalcredentials/vc-data-model": "^2.0.0",
     "@interop/did-web-resolver": "^3.0.1",
+    "async-mutex": "^0.5.0",
     "bnid": "^3.0.0",
     "crypto-ld": "^7.0.0",
     "mongodb": "^6.3.0",

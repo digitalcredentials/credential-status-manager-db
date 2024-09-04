@@ -46,10 +46,7 @@ export const statusCredentialSiteOrigin = 'https://credentials.example.edu/statu
 export const didMethod = 'key' as DidMethod;
 export const didSeed = 'DsnrHBHFQP0ab59dQELh3uEwy7i5ArcOTwxkwRO2hM87CBRGWBEChPO7AjmwkAZ2';
 
-export function checkLocalCredentialStatus(
-  credentialWithStatus: any,
-  statusListIndex: number
-) {
+export function checkLocalCredentialStatus(credentialWithStatus: any) {
   expect(credentialWithStatus).to.have.property('credentialStatus');
   expect(credentialWithStatus.credentialStatus).to.have.property('id');
   expect(credentialWithStatus.credentialStatus).to.have.property('type');
@@ -58,21 +55,18 @@ export function checkLocalCredentialStatus(
   expect(credentialWithStatus.credentialStatus).to.have.property('statusListCredential');
   expect(credentialWithStatus.credentialStatus.type).to.equal('BitstringStatusListEntry');
   expect(credentialWithStatus.credentialStatus.statusPurpose).to.equal('revocation');
-  expect(credentialWithStatus.credentialStatus.statusListIndex).to.equal(statusListIndex.toString());
   expect(credentialWithStatus.credentialStatus.id.startsWith(statusCredentialSiteOrigin)).to.be.true;
   expect(credentialWithStatus.credentialStatus.statusListCredential.startsWith(statusCredentialSiteOrigin)).to.be.true;
 }
 
 export function checkRemoteCredentialStatus(
   statusInfo: any,
-  statusListIndex: number,
   valid: boolean
 ) {
   expect(statusInfo).to.have.property('revocation');
   expect(statusInfo.revocation).to.have.property('statusCredentialId');
   expect(statusInfo.revocation).to.have.property('statusListIndex');
   expect(statusInfo.revocation).to.have.property('valid');
-  expect(statusInfo.revocation.statusListIndex).to.equal(statusListIndex);
   expect(statusInfo.revocation.valid).to.equal(valid);
 }
 
@@ -96,7 +90,6 @@ export function checkStatusCredential(
 export function checkUserCredentialInfo(
   credentialId: string,
   credentialRecord: any,
-  statusListIndex: number,
   valid: boolean
 ) {
   expect(credentialRecord).to.have.property('id');
@@ -106,5 +99,5 @@ export function checkUserCredentialInfo(
   expect(credentialRecord.id).to.equal(credentialId);
   expect(credentialRecord.issuer).to.equal(issuerDid);
   expect(credentialRecord.subject).to.equal(credentialSubject);
-  checkRemoteCredentialStatus(credentialRecord.statusInfo, statusListIndex, valid);
+  checkRemoteCredentialStatus(credentialRecord.statusInfo, valid);
 }

@@ -21,7 +21,6 @@
   - [`UserCredential`](#usercredential)
   - [`Config`](#config)
   - [`Event`](#event)
-  - [`CredentialEvent`](#credentialevent)
 - [Dependencies](#dependencies)
   - [Generate DID seeds](#generate-did-seeds)
 - [Contribute](#contribute)
@@ -73,7 +72,6 @@ The `createStatusManager` function is the only exported pure function of this li
 | `userCredentialTableName` | name of the database table used to manage user credentials ([schema](#usercredential)) | string | no (default: `UserCredential`) |
 | `configTableName` | name of the database table used to manage application configuration ([schema](#config)) | string | no (default: `Config`) |
 | `eventTableName` | name of the database table used to manage credential status events ([schema](#event)) | string | no (default: `Event`) |
-| `credentialEventTableName` | name of the database table used to manage the latest status event for a given credential ([schema](#credentialevent)) | string | no (default: `CredentialEvent`) |
 | `autoDeployDatabase` | whether or not to automatically create the database (`databaseName`) and the initial tables (`statusCredentialTableName` and `configTableName`) | string | no (default: `true`) |
 | `didMethod` | name of the DID method used for signing | `key` \| `web` | yes |
 | `didSeed` | seed used to deterministically generate DID | string | yes |
@@ -226,6 +224,8 @@ There is a lot of data that is managed by this service. In this section, we will
 | Key | Description | Type |
 | --- | --- | --- |
 | `id` | ID of the status credential database record | string |
+| `order` | the order in which this status credential was created relative to other status credentials | number |
+| `purpose` | name of the purpose of this status credential | `revocation` \| `suspension` (see `statusPurpose` [here](https://www.w3.org/TR/vc-bitstring-status-list#bitstringstatuslistcredential)) |
 | `credential` | Bitstring Status List Verifiable Credential | object ([BitstringStatusListCredential](https://www.w3.org/TR/vc-bitstring-status-list#bitstringstatuslistcredential)) |
 
 ### `UserCredential`
@@ -247,10 +247,8 @@ There is a lot of data that is managed by this service. In this section, we will
 | `id` | ID of the config database record | string |
 | `statusCredentialSiteOrigin` | base URL of status credentials managed by a given deployment | string |
 | `statusCredentialInfo` | mapping from status purpose to status credential info | object |
-| `statusCredentialInfo[PURPOSE].latestStatusCredentialId` | ID of the latest status credential to be created for a given purpose in a given deployment | string |
-| `statusCredentialInfo[PURPOSE].latestCredentialsIssuedCounter` | number of credentials issued against the latest status credential for a given purpose in a given deployment | number |
-| `statusCredentialInfo[PURPOSE].statusCredentialsCounter` | total number of status credentials for a given purpose in a given deployment | number |
-| `credentialsIssuedCounter` | total number of credentials issued in a given deployment | number |
+| `statusCredentialInfo[PURPOSE].latestId` | ID of the latest status credential to be created for a given purpose in a given deployment | string |
+| `statusCredentialInfo[PURPOSE].latestOrder` | latestOrder of the latest status credential to be created for a given purpose in a given deployment (total number of status credentials) | number |
 
 ### `Event`
 
@@ -262,13 +260,6 @@ There is a lot of data that is managed by this service. In this section, we will
 | `statusPurpose` | name of the purpose of the credential status whose modification is being tracked by the event | `revocation` \| `suspension` (see `statusPurpose` [here](https://www.w3.org/TR/vc-bitstring-status-list#bitstringstatuslistcredential)) |
 | `valid` | validity of the credential that is being applied by the event | boolean |
 
-### `CredentialEvent`
-
-| Key | Description | Type |
-| --- | --- | --- |
-| `credentialId` | ID of a previously issued credential database record | string |
-| `eventId` | ID of the latest status event database record for credential with ID `credentialId` | string |
-
 ## Dependencies
 
 ### Generate DID seeds
@@ -276,7 +267,7 @@ There is a lot of data that is managed by this service. In this section, we will
 In order to generate a DID seed, you will need to use software that is capable of creating it in a format that corresponds to a valid DID document. Here is sample code that does this:
 
 ```ts
-import { generateSecretKeySeed } from '@digitalcredentials/bnid';
+import { generateSecretKeySeed } from 'bnid';
 
 // Set `didSeed` key to this value
 const secretKeySeed = await generateSecretKeySeed();
@@ -285,11 +276,11 @@ const secretKeySeed = await generateSecretKeySeed();
 If `didMethod` = `web`, you must also generate a DID document and host it at `didWebUrl`/.well-known/did.json. Here is sample code that does this:
 
 ```ts
-import { decodeSecretKeySeed } from '@digitalcredentials/bnid';
-import { Ed25519VerificationKey2020 } from '@digitalcredentials/ed25519-verification-key-2020';
-import { X25519KeyAgreementKey2020 } from '@digitalcredentials/x25519-key-agreement-key-2020';
+import { decodeSecretKeySeed } from 'bnid';
+import { Ed25519VerificationKey2020 } from '@digitalbazaar/ed25519-verification-key-2020';
+import { X25519KeyAgreementKey2020 } from '@digitalbazaar/x25519-key-agreement-key-2020';
 import * as DidWeb from '@interop/did-web-resolver';
-import { CryptoLD } from '@digitalcredentials/crypto-ld';
+import { CryptoLD } from 'crypto-ld';
 
 const cryptoLd = new CryptoLD();
 cryptoLd.use(Ed25519VerificationKey2020);
