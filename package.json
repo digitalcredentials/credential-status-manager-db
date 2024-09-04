@@ -1,7 +1,7 @@
 {
   "name": "@digitalcredentials/credential-status-manager-db",
   "description": "A Typescript library for managing the status of Verifiable Credentials in a Database using Bitstring Status List.",
-  "version": "0.0.1-beta.0",
+  "version": "0.0.1",
   "license": "MIT",
   "engines": {
     "node": ">=20.0"
