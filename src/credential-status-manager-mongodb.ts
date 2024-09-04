@@ -10,7 +10,8 @@ import {
   MongoClient,
   ReadConcernLevel,
   ReadPreference,
-  TransactionOptions
+  TransactionOptions,
+  WithId
 } from 'mongodb';
 import {
   BaseCredentialStatusManager,
@@ -541,7 +542,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     const optionsObject = options ?? {};
     const { client: clientCandidate, session } = optionsObject;
     let client = clientCandidate;
-    let records = [];
+    let records: Array<WithId<Document>> = [];
     try {
       const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;
@@ -566,7 +567,7 @@ export class MongoDbCredentialStatusManager extends BaseCredentialStatusManager 
     const optionsObject = options ?? {};
     const { client: clientCandidate, session } = optionsObject;
     let client = clientCandidate;
-    let records = [];
+    let records: Array<WithId<Document>> = [];
     try {
       const databaseConnection = await this.connectDatabase(options);
       const { database } = databaseConnection;

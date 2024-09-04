@@ -6,7 +6,7 @@ export class IndexAllocator {
 
   constructor(allocatedIndices: number[], maxIndex: number, availableIndexBuffer: number) {
     const allocatedIndexSet = new Set<number>(allocatedIndices);
-    const availableIndices = [];
+    const availableIndices: number[] = [];
     for (let i = 1; i <= maxIndex; i++) {
       if (!allocatedIndexSet.has(i)) {
         availableIndices.push(i);

@@ -1439,7 +1439,7 @@ export abstract class BaseCredentialStatusManager {
         // ensure that status is consistent
         const statusCredentials = await this.getAllStatusCredentialsByPurpose(statusPurpose, options);
         let hasLatestStatusCredentialId = false;
-        const invalidStatusCredentialIds = [];
+        const invalidStatusCredentialIds: string[] = [];
         for (const statusCredential of statusCredentials) {
           // ensure that status credential has valid type
           if (typeof statusCredential === 'string') {
@@ -1465,7 +1465,7 @@ export abstract class BaseCredentialStatusManager {
                                                  hasValidStatusCredentialSubType &&
                                                  hasValidStatusCredentialSubStatusPurpose;
           if (!hasValidStatusCredentialFormat) {
-            invalidStatusCredentialIds.push(statusCredential.id);
+            invalidStatusCredentialIds.push(statusCredential.id as string);
           }
         }
 
@@ -1476,7 +1476,7 @@ export abstract class BaseCredentialStatusManager {
             error: new InvalidDatabaseStateError({
               message: 'Status credentials with the following IDs ' +
                 'have an invalid format: ' +
-                `${invalidStatusCredentialIds.map(id => `"${id as string}"`).join(', ')}`
+                `${invalidStatusCredentialIds.map(id => `"${id}"`).join(', ')}`
             })
           };
         }
@@ -1942,7 +1942,7 @@ export abstract class BaseCredentialStatusManager {
    * @returns {Promise<VerifiableCredential[]>} Resolves to all matching status credentials.
    */
   async getAllStatusCredentialsByPurpose(purpose: StatusPurpose, options?: DatabaseConnectionOptions): Promise<VerifiableCredential[]> {
-    let statusCredentials = [];
+    let statusCredentials: VerifiableCredential[] = [];
     try {
       const statusCredentialRecords = await this.getAllStatusCredentialRecordsByPurpose(purpose, options);
       statusCredentials = statusCredentialRecords
@@ -1964,7 +1964,7 @@ export abstract class BaseCredentialStatusManager {
    * @returns {Promise<string[]>} Resolves to all user credential IDs.
    */
   async getAllUserCredentialIds(options?: DatabaseConnectionOptions): Promise<string[]> {
-    let credentialIds = [];
+    let credentialIds: string[] = [];
     try {
       const credentialRecords = await this.getAllUserCredentialRecords(options);
       credentialIds = credentialRecords.map(e => e.id);

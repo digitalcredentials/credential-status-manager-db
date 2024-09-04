@@ -131,7 +131,7 @@ export async function signCredential({
   });
 
   const date = getDateString();
-  const suite = new Ed25519Signature2020({ key:signingKey, date });
+  const suite = new Ed25519Signature2020({ key: signingKey, date });
   return sign({
     credential,
     documentLoader,

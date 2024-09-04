@@ -267,7 +267,7 @@ There is a lot of data that is managed by this service. In this section, we will
 In order to generate a DID seed, you will need to use software that is capable of creating it in a format that corresponds to a valid DID document. Here is sample code that does this:
 
 ```ts
-import { generateSecretKeySeed } from '@digitalcredentials/bnid';
+import { generateSecretKeySeed } from 'bnid';
 
 // Set `didSeed` key to this value
 const secretKeySeed = await generateSecretKeySeed();
@@ -276,11 +276,11 @@ const secretKeySeed = await generateSecretKeySeed();
 If `didMethod` = `web`, you must also generate a DID document and host it at `didWebUrl`/.well-known/did.json. Here is sample code that does this:
 
 ```ts
-import { decodeSecretKeySeed } from '@digitalcredentials/bnid';
-import { Ed25519VerificationKey2020 } from '@digitalcredentials/ed25519-verification-key-2020';
-import { X25519KeyAgreementKey2020 } from '@digitalcredentials/x25519-key-agreement-key-2020';
+import { decodeSecretKeySeed } from 'bnid';
+import { Ed25519VerificationKey2020 } from '@digitalbazaar/ed25519-verification-key-2020';
+import { X25519KeyAgreementKey2020 } from '@digitalbazaar/x25519-key-agreement-key-2020';
 import * as DidWeb from '@interop/did-web-resolver';
-import { CryptoLD } from '@digitalcredentials/crypto-ld';
+import { CryptoLD } from 'crypto-ld';
 
 const cryptoLd = new CryptoLD();
 cryptoLd.use(Ed25519VerificationKey2020);
